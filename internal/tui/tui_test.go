@@ -273,3 +273,40 @@ func TestViewActsOnViewedTask(t *testing.T) {
 		}
 	}
 }
+
+func TestDragDetailBorderResizes(t *testing.T) {
+	m, _ := setup(t)
+	g := m.geom()
+	top0 := g.detailTop
+	click(m, 5, top0)
+	if !m.dragDetail {
+		t.Fatal("press on detail top border should start drag")
+	}
+	m.Update(tea.MouseMsg{X: 5, Y: top0 - 4, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m.Update(tea.MouseMsg{X: 5, Y: top0 - 4, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	if m.dragDetail {
+		t.Fatal("release should end drag")
+	}
+	if g2 := m.geom(); g2.detailTop != top0-4 || g2.detailH != g.detailH+4 {
+		t.Fatalf("detail not resized: top %d->%d h %d->%d", top0, g2.detailTop, g.detailH, g2.detailH)
+	}
+	// 高さは保存され、次回起動時に復元される
+	if m2 := newModel(m.st, 0); m2.detailH != m.detailH {
+		t.Fatalf("restored detailH=%d, want %d", m2.detailH, m.detailH)
+	}
+	// 上限・下限でクランプされ、上の枠が潰れない
+	click(m, 5, m.geom().detailTop)
+	m.Update(tea.MouseMsg{X: 5, Y: 0, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	if g3 := m.geom(); g3.paneH < minPaneH {
+		t.Fatalf("pane collapsed: paneH=%d", g3.paneH)
+	}
+	m.Update(tea.MouseMsg{X: 5, Y: m.h, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	if g4 := m.geom(); g4.detailH != minDetailH {
+		t.Fatalf("detailH=%d, want min %d", g4.detailH, minDetailH)
+	}
+	for _, l := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(l); w != m.w {
+			t.Fatalf("line width %d != %d", w, m.w)
+		}
+	}
+}

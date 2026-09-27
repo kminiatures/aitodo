@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -100,6 +101,9 @@ type model struct {
 
 	lastClickAt time.Time
 	lastClickY  int
+
+	detailH    int  // ユーザーがドラッグで決めた詳細枠の高さ（0 = 既定）
+	dragDetail bool // 詳細枠の上辺をドラッグ中
 }
 
 type tickMsg time.Time
@@ -118,6 +122,9 @@ func Run(st *store.Store, initialSession int64) error {
 
 func newModel(st *store.Store, initialSession int64) *model {
 	m := &model{st: st, w: 100, h: 30, wantSession: initialSession}
+	if v, _ := st.GetSetting(settingDetailH); v != "" {
+		m.detailH, _ = strconv.Atoi(v)
+	}
 	if initialSession != 0 {
 		m.focus = focusTasks
 	}
@@ -234,10 +241,11 @@ func (m *model) geom() geom {
 	}
 	g.tw = m.w - g.sw
 	g.sx, g.tx = 0, g.sw
-	g.detailH = 7
-	if m.h < 20 {
-		g.detailH = 4
+	g.detailH = m.detailH
+	if g.detailH == 0 {
+		g.detailH = m.h / 3
 	}
+	g.detailH = clamp(g.detailH, minDetailH, m.maxDetailH())
 	g.helpY = m.h - 1
 	g.buttonsY = m.h - 2
 	g.detailTop = g.buttonsY - g.detailH
@@ -248,6 +256,21 @@ func (m *model) geom() geom {
 	}
 	g.rows = g.paneH - 2
 	return g
+}
+
+const minDetailH, minPaneH = 4, 5
+
+const settingDetailH = "tui.detail_height"
+
+// maxDetailH は上の枠を minPaneH 行残せる詳細枠の最大高さ（タイトル行・ボタン行・ヘルプ行を除く）。
+func (m *model) maxDetailH() int { return max(minDetailH, m.h-3-minPaneH) }
+
+// setDetailTop は詳細枠の上辺を y に合わせて高さを変える。
+func (m *model) setDetailTop(y int) {
+	m.detailH = clamp(m.h-2-y, minDetailH, m.maxDetailH())
+	g := m.geom()
+	m.sOff = clamp(m.sOff, 0, max(0, len(m.sessions)-g.rows))
+	m.tOff = clamp(m.tOff, 0, max(0, len(m.tasks)-g.rows))
 }
 
 func (m *model) ensureVisible() {
@@ -652,7 +675,7 @@ func (m *model) renderDetail(g geom, lines []string) {
 		title = "Welcome"
 		body = []string{"n: 新しいセッションを作成。AI からは `aitodo manual` を参照。"}
 	}
-	lines[g.detailTop] = boxTop(title, m.w, false)
+	lines[g.detailTop] = boxTop(title, m.w, m.dragDetail)
 	for r := 0; r < g.detailH-2; r++ {
 		txt := ""
 		if r < len(body) {
@@ -839,6 +862,19 @@ func (m *model) selectSession(i int) {
 func (m *model) mouse(ev tea.MouseMsg) tea.Cmd {
 	_, regs := m.render()
 	g := m.geom()
+	// 詳細枠の上辺ドラッグで高さを変更
+	if m.dragDetail {
+		switch ev.Action {
+		case tea.MouseActionMotion:
+			m.setDetailTop(ev.Y)
+		case tea.MouseActionRelease:
+			m.dragDetail = false
+			if err := m.st.SetSetting(settingDetailH, strconv.Itoa(m.detailH)); err != nil {
+				m.setErr(err)
+			}
+		}
+		return nil
+	}
 	if ev.Action != tea.MouseActionPress {
 		return nil
 	}
@@ -867,6 +903,10 @@ func (m *model) mouse(ev tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	if ev.Button != tea.MouseButtonLeft {
+		return nil
+	}
+	if m.form == nil && m.view == nil && !m.tooSmall() && ev.Y == g.detailTop {
+		m.dragDetail = true
 		return nil
 	}
 	double := time.Since(m.lastClickAt) < 400*time.Millisecond && m.lastClickY == ev.Y
