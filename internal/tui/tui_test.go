@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/kminiatures/aitodo/internal/store"
 )
@@ -308,5 +309,85 @@ func TestDragDetailBorderResizes(t *testing.T) {
 		if w := lipgloss.Width(l); w != m.w {
 			t.Fatalf("line width %d != %d", w, m.w)
 		}
+	}
+}
+
+func rightClick(m *model, x, y int) {
+	m.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonRight})
+}
+
+// 右クリックで行を選択してメニューを開き、項目クリック・キーで実行できる。
+func TestContextMenu(t *testing.T) {
+	m, st := setup(t)
+	g := m.geom()
+	y := g.paneTop + 1 + 2
+	rightClick(m, g.tx+10, y)
+	if m.menu == nil || m.focus != focusTasks || m.tIdx != 2 {
+		t.Fatalf("menu=%v focus=%d tIdx=%d", m.menu, m.focus, m.tIdx)
+	}
+	// 描画幅が崩れない
+	for i, l := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(l); w != 80 {
+			t.Errorf("line %d width %d: %q", i, w, l)
+		}
+	}
+	// 先頭項目（完了）をクリック
+	_, regs := m.render()
+	var hit *region
+	for i := range regs {
+		if regs[i].kind == rMenuItem && regs[i].idx == 0 {
+			hit = &regs[i]
+		}
+	}
+	if hit == nil {
+		t.Fatal("no menu item region")
+	}
+	click(m, hit.x0+1, hit.y)
+	if m.menu != nil {
+		t.Fatal("menu should close")
+	}
+	if tk, _ := st.GetTask(m.tasks[2].ID); tk.Status != store.StatusDone {
+		t.Fatalf("status = %s, want done", tk.Status)
+	}
+
+	// キー操作: ↓ enter で 2 番目（着手）
+	rightClick(m, g.tx+10, g.paneTop+1)
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if tk, _ := st.GetTask(m.tasks[0].ID); tk.Status != store.StatusDoing {
+		t.Fatalf("status = %s, want doing", tk.Status)
+	}
+
+	// 外側クリック・esc で閉じるだけ
+	rightClick(m, g.tx+10, g.paneTop+1)
+	click(m, 0, 0)
+	if m.menu != nil {
+		t.Fatal("outside click should close menu")
+	}
+	rightClick(m, g.tx+10, g.paneTop+1)
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.menu != nil {
+		t.Fatal("esc should close menu")
+	}
+
+	// セッション行: 右端近くでも画面内に収まり、編集フォームが開く
+	rightClick(m, g.sx+2, g.paneTop+1+1)
+	if m.menu == nil || m.focus != focusSessions || m.sIdx != 1 {
+		t.Fatalf("session menu: menu=%v focus=%d sIdx=%d", m.menu, m.focus, m.sIdx)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if m.form == nil || m.form.kind != "edit-session" {
+		t.Fatalf("form = %+v", m.form)
+	}
+}
+
+func TestOverlayWide(t *testing.T) {
+	line := "あいうえお" // 幅 10
+	got := overlay(line, 3, "XX", 2)
+	if w := ansi.StringWidth(got); w != 10 {
+		t.Fatalf("width %d: %q", w, got)
+	}
+	if s := ansi.Strip(got); s != "あ XX えお" {
+		t.Fatalf("got %q", s)
 	}
 }
