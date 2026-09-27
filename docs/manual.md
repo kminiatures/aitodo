@@ -165,7 +165,7 @@ the server's cwd, which is normally the project directory.
 Run `aitodo`, or `aitodo tui -s REF`. It auto-refreshes every 1.5 s, so you can watch an agent check tasks off.
 Subtasks are shown as an indented tree, with `done/total` and `✎N` (the comment count) at the right.
 Mouse: click to select, click `[ ]` to toggle done, double-click a task to edit it, use the wheel to scroll,
-drag the detail pane's top border to resize it (remembered across restarts), and click the buttons in the bottom bar.
+drag the detail pane's top border to resize it (remembered across restarts), right-click a row or empty pane space for a context menu, and click the buttons in the bottom bar.
 Keys: `tab` switches panes, `j/k` moves, `space` toggles done, `s` doing, `b` blocked, `-` skipped, `a` adds a task, `A` adds a subtask, `c` comments,
 `v` opens the full task view (body, subtasks, all comments),
 `n` creates a session, `e` edits, `w` sets the workdir (Tab completes folders like bash), `d` deletes, `J/K` reorders, `f` hides done tasks,

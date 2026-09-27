@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/kminiatures/aitodo/internal/store"
@@ -40,6 +41,7 @@ var (
 	stErr      = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
 	stOK       = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	stLabel    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	stMenu     = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("236"))
 )
 
 var marks = map[string]string{
@@ -69,6 +71,7 @@ const (
 	rFormCandidate
 	rSessionPane
 	rTaskPane
+	rMenuItem
 )
 
 type region struct {
@@ -98,6 +101,7 @@ type model struct {
 
 	form *form
 	view *taskView // タスク詳細（コメント全文）ビュー
+	menu *ctxMenu  // 右クリックのコンテキストメニュー
 
 	lastClickAt time.Time
 	lastClickY  int
@@ -497,7 +501,13 @@ func (m *model) render() ([]string, []region) {
 	default:
 		help = stDim.Render(fit(" ↑↓/jk move  space done  s start  b block  - skip  a add  A sub  c comment  v view  e edit  J/K reorder  f hide done  q quit", m.w))
 	}
+	if m.menu != nil {
+		help = stDim.Render(fit(" ↑↓/jk 選択  enter 実行  esc 閉じる  (右端のキーでも実行)", m.w))
+	}
 	lines[g.helpY] = help
+	if m.menu != nil {
+		m.renderMenu(lines, &regs)
+	}
 	return lines, regs
 }
 
@@ -751,6 +761,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	case tea.KeyMsg:
+		if m.menu != nil {
+			cmd := m.menuKey(msg)
+			m.ensureVisible()
+			return m, cmd
+		}
 		if m.form != nil {
 			return m, m.formKey(msg)
 		}
@@ -876,6 +891,24 @@ func (m *model) mouse(ev tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	if ev.Action != tea.MouseActionPress {
+		return nil
+	}
+	// メニュー表示中: 項目クリックで実行、それ以外のクリックで閉じる
+	if m.menu != nil {
+		if tea.MouseEvent(ev).IsWheel() {
+			return nil
+		}
+		for _, r := range regs {
+			if r.kind == rMenuItem && r.y == ev.Y && ev.X >= r.x0 && ev.X < r.x1 {
+				m.menu.sel = r.idx
+				return m.runMenu()
+			}
+		}
+		m.menu = nil
+		return nil
+	}
+	if ev.Button == tea.MouseButtonRight {
+		m.rightClick(ev, regs, g)
 		return nil
 	}
 	// ホイール: カーソル下の枠をスクロール
@@ -1543,4 +1576,165 @@ func (m *model) viewKey(k tea.KeyMsg) tea.Cmd {
 		return m.action("edit")
 	}
 	return nil
+}
+
+// ---------- context menu ----------
+
+type menuItem struct{ label, key, action string }
+
+type ctxMenu struct {
+	x, y  int // クリック位置（描画時に画面内へ収める）
+	items []menuItem
+	sel   int
+}
+
+// rightClick はクリック位置の行を選択し、その対象用のメニューを開く。
+func (m *model) rightClick(ev tea.MouseMsg, regs []region, g geom) {
+	if m.form != nil || m.view != nil || m.tooSmall() {
+		return
+	}
+	m.msg = ""
+	var items []menuItem
+	for _, r := range regs {
+		if r.y != ev.Y || ev.X < r.x0 || ev.X >= r.x1 {
+			continue
+		}
+		switch r.kind {
+		case rSession:
+			m.focus = focusSessions
+			m.selectSession(r.idx)
+			items = m.sessionMenu()
+		case rTask, rCheckbox:
+			m.focus = focusTasks
+			m.tIdx = r.idx
+			items = taskMenu
+		}
+	}
+	if items == nil { // 行のない枠内の余白
+		for _, r := range regs {
+			if r.y == -1 && ev.X >= r.x0 && ev.X < r.x1 && ev.Y >= g.paneTop && ev.Y < g.paneTop+g.paneH {
+				if r.kind == rSessionPane {
+					m.focus = focusSessions
+					items = []menuItem{{"+ セッション", "n", "new-session"}, {"アーカイブ表示切替", "H", "show-archived"}}
+				} else {
+					m.focus = focusTasks
+					items = []menuItem{{"+ タスク", "a", "new-task"}, {"完了の表示切替", "f", "hide-done"}}
+				}
+			}
+		}
+	}
+	if items != nil {
+		m.menu = &ctxMenu{x: ev.X, y: ev.Y, items: items}
+	}
+}
+
+var taskMenu = []menuItem{
+	{"✓ 完了 / 戻す", "space", "toggle-done"},
+	{"▶ 着手 / 戻す", "s", "toggle-doing"},
+	{"! ブロック", "b", "toggle-blocked"},
+	{"- スキップ", "-", "toggle-skipped"},
+	{"+ サブタスク", "A", "new-subtask"},
+	{"コメント", "c", "comment"},
+	{"詳細を見る", "v", "view"},
+	{"編集", "e", "edit"},
+	{"上へ移動", "K", "move-up"},
+	{"下へ移動", "J", "move-down"},
+	{"削除", "d", "delete"},
+}
+
+func (m *model) sessionMenu() []menuItem {
+	arch := "アーカイブ"
+	if s := m.curSession(); s != nil && s.Status == store.SessionArchived {
+		arch = "アーカイブ解除"
+	}
+	return []menuItem{
+		{"+ タスク", "a", "new-task"},
+		{"編集", "e", "edit"},
+		{"作業フォルダ", "w", "workdir"},
+		{arch, "z", "archive"},
+		{"削除", "d", "delete"},
+		{"+ セッション", "n", "new-session"},
+	}
+}
+
+func (m *model) runMenu() tea.Cmd {
+	a := m.menu.items[m.menu.sel].action
+	m.menu = nil
+	return m.action(a)
+}
+
+func (m *model) menuKey(k tea.KeyMsg) tea.Cmd {
+	mn := m.menu
+	switch ks := k.String(); ks {
+	case "esc", "q":
+		m.menu = nil
+	case "ctrl+c":
+		return tea.Quit
+	case "up", "k":
+		mn.sel = (mn.sel + len(mn.items) - 1) % len(mn.items)
+	case "down", "j":
+		mn.sel = (mn.sel + 1) % len(mn.items)
+	case "enter":
+		return m.runMenu()
+	default:
+		if ks == " " {
+			ks = "space"
+		}
+		for i, it := range mn.items {
+			if it.key == ks {
+				mn.sel = i
+				return m.runMenu()
+			}
+		}
+	}
+	return nil
+}
+
+// renderMenu はメニューを lines の上に重ねて描き、項目の領域を regs に足す。
+func (m *model) renderMenu(lines []string, regs *[]region) {
+	mn := m.menu
+	lw, kw := 0, 0
+	for _, it := range mn.items {
+		lw = max(lw, runewidth.StringWidth(it.label))
+		kw = max(kw, runewidth.StringWidth(it.key))
+	}
+	inner := 1 + lw + 3 + kw + 1
+	w, h := inner+2, len(mn.items)+2
+	x := clamp(mn.x, 0, max(0, m.w-w))
+	y := clamp(mn.y, 1, max(1, len(lines)-h))
+	put := func(row int, s string) {
+		if row >= 0 && row < len(lines) {
+			lines[row] = overlay(lines[row], x, s, w)
+		}
+	}
+	bs := stBorderOn
+	put(y, bs.Render("┌"+strings.Repeat("─", inner)+"┐"))
+	for i, it := range mn.items {
+		txt := " " + runewidth.FillRight(it.label, lw) + "   " + fmt.Sprintf("%*s", kw, it.key) + " "
+		if i == mn.sel {
+			txt = stSel.Render(txt)
+		} else {
+			txt = stMenu.Render(txt)
+		}
+		put(y+1+i, bs.Render("│")+txt+bs.Render("│"))
+		*regs = append(*regs, region{y: y + 1 + i, x0: x + 1, x1: x + 1 + inner, kind: rMenuItem, idx: i})
+	}
+	put(y+h-1, bs.Render("└"+strings.Repeat("─", inner)+"┘"))
+}
+
+// overlay は装飾付きの行 line の表示位置 x から幅 w を s で置き換える（全角の途中で切れる場合は空白で埋める）。
+func overlay(line string, x int, s string, w int) string {
+	lw := ansi.StringWidth(line)
+	if lw < x+w {
+		line += strings.Repeat(" ", x+w-lw)
+		lw = x + w
+	}
+	left := ansi.Truncate(line, x, "")
+	left += strings.Repeat(" ", x-ansi.StringWidth(left))
+	want := lw - (x + w)
+	right := ansi.TruncateLeft(line, x+w, "")
+	if ansi.StringWidth(right) > want { // 境界をまたぐ全角文字を落とす
+		right = ansi.TruncateLeft(line, x+w+1, " ")
+	}
+	return left + "\x1b[0m" + s + "\x1b[0m" + right
 }
