@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kminiatures/aitodo/docs"
 	"github.com/kminiatures/aitodo/internal/mcp"
@@ -277,6 +278,16 @@ func (a *app) printTaskDetail(d *store.TaskDetail) {
 	if t.ParentID != nil {
 		fmt.Fprintf(a.out, "parent:  #%d\n", *t.ParentID)
 	}
+	fmt.Fprintf(a.out, "created: %s\n", localTime(t.CreatedAt))
+	if t.StartedAt != nil {
+		fmt.Fprintf(a.out, "started: %s\n", localTime(*t.StartedAt))
+	}
+	if t.DoneAt != nil {
+		fmt.Fprintf(a.out, "%-8s %s\n", t.Status+":", localTime(*t.DoneAt))
+	}
+	if d, ok := t.WorkTime(time.Now()); ok {
+		fmt.Fprintf(a.out, "took:    %s\n", tui.FmtDuration(d))
+	}
 	if t.Body != "" {
 		fmt.Fprintf(a.out, "body:\n%s\n", indent(t.Body))
 	}
@@ -303,7 +314,16 @@ func (a *app) printComment(c *store.Comment) {
 	if author == "" {
 		author = "?"
 	}
-	fmt.Fprintf(a.out, "  [c%d] %s  %s\n%s\n", c.ID, author, c.CreatedAt, indent(indent(c.Body)))
+	fmt.Fprintf(a.out, "  [c%d] %s  %s\n%s\n", c.ID, author, localTime(c.CreatedAt), indent(indent(c.Body)))
+}
+
+// localTime は RFC3339 (UTC) の日時をローカル時刻の "2006-01-02 15:04" にする。
+func localTime(s string) string {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return s
+	}
+	return t.Local().Format("2006-01-02 15:04")
 }
 
 func indent(s string) string {

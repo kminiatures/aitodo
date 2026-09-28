@@ -60,6 +60,7 @@ type Task struct {
 	Position  int     `json:"position"`
 	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
+	StartedAt *string `json:"started_at"` // 着手（初めて doing になった）日時。todo に戻すと消える
 	DoneAt    *string `json:"done_at"`
 	// 以下は算出値
 	Depth         int `json:"depth"`          // 木の深さ（トップレベル = 0）。ListTasks でのみ設定
@@ -92,7 +93,7 @@ func DefaultPath() string {
 	return filepath.Join(home, ".aitodo", "aitodo.db")
 }
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 const schemaV1 = `
 CREATE TABLE sessions (
@@ -139,6 +140,11 @@ CREATE TABLE settings (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+`
+
+// v4: 着手日時
+const schemaV4 = `
+ALTER TABLE tasks ADD COLUMN started_at TEXT;
 `
 
 func Open(path string) (*Store, error) {
@@ -200,6 +206,11 @@ func (s *Store) migrate() error {
 	}
 	if v < 3 {
 		if _, err := tx.Exec(schemaV3); err != nil {
+			return err
+		}
+	}
+	if v < 4 {
+		if _, err := tx.Exec(schemaV4); err != nil {
 			return err
 		}
 	}

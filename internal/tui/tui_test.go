@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -513,3 +514,28 @@ func TestCtrlEnterSubmits(t *testing.T) {
 type fakeCSI string
 
 func (f fakeCSI) String() string { return fmt.Sprintf("?CSI%+v?", []byte(f)[2:]) }
+
+func TestTaskTimes(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		30 * time.Second:             "<1m",
+		12 * time.Minute:             "12m",
+		2*time.Hour + 5*time.Minute:  "2h05m",
+		3*24*time.Hour + 4*time.Hour: "3d4h",
+	} {
+		if got := FmtDuration(d); got != want {
+			t.Errorf("FmtDuration(%v) = %q, want %q", d, got, want)
+		}
+	}
+	m, st := setup(t)
+	m.focus = focusTasks
+	id := m.curTask().ID
+	st.SetStatus(id, store.StatusDoing, nil)
+	st.SetStatus(id, store.StatusDone, nil)
+	m.reload()
+	v := m.View()
+	for _, s := range []string{"created ", "started ", "done ", "(took "} {
+		if !strings.Contains(v, s) {
+			t.Errorf("detail pane lacks %q", s)
+		}
+	}
+}

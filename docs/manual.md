@@ -134,7 +134,7 @@ echo '[{"title":"Write tests","body":"cover edge cases","subtasks":["unit","e2e"
  "created_at":"2026-09-27T03:00:00Z","updated_at":"...","total":4,"done":1,"doing":1}
 // task (list items; "depth" is the tree depth in `ls` output)
 {"id":12,"session_id":1,"parent_id":null,"title":"...","body":"...","status":"doing","note":"","position":2,
- "created_at":"...","updated_at":"...","done_at":null,
+ "created_at":"...","updated_at":"...","started_at":"...","done_at":null,
  "depth":0,"subtasks_total":2,"subtasks_done":1,"comment_count":3}
 // task detail (task show / next): the task fields plus
  "subtasks":[{task}...], "comments":[{"id":1,"task_id":12,"author":"ai","body":"...","created_at":"..."}]

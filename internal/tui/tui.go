@@ -647,9 +647,6 @@ func (m *model) renderDetail(g geom, lines []string) {
 	var body []string
 	if t := m.curTask(); m.focus == focusTasks && t != nil {
 		title = fmt.Sprintf("Task #%d  %s", t.ID, t.Status)
-		if t.DoneAt != nil {
-			title += "  done " + shortTime(*t.DoneAt)
-		}
 		if t.SubtasksTotal > 0 {
 			title += fmt.Sprintf("  subtasks %d/%d", t.SubtasksDone, t.SubtasksTotal)
 		}
@@ -657,6 +654,7 @@ func (m *model) renderDetail(g geom, lines []string) {
 			title += fmt.Sprintf("  ✎%d (v で全文)", t.CommentCount)
 		}
 		body = append(body, wrap(t.Title, inner-2)...)
+		body = append(body, stDim.Render(TaskTimes(t, time.Now())))
 		if t.Note != "" {
 			for i, l := range wrap(t.Note, inner-4) {
 				p := "  "
@@ -684,7 +682,8 @@ func (m *model) renderDetail(g geom, lines []string) {
 			wd = "(未設定 — w で設定)"
 		}
 		body = append(body, stLabel.Render("name:    ")+s.Name, stLabel.Render("workdir: ")+wd)
-		body = append(body, stLabel.Render("tasks:   ")+fmt.Sprintf("%d total, %d done, %d doing   updated %s", s.Total, s.Done, s.Doing, shortTime(s.UpdatedAt)))
+		body = append(body, stLabel.Render("tasks:   ")+fmt.Sprintf("%d total, %d done, %d doing", s.Total, s.Done, s.Doing))
+		body = append(body, stLabel.Render("time:    ")+"created "+shortTime(s.CreatedAt)+"   updated "+shortTime(s.UpdatedAt))
 		if s.Description != "" {
 			body = append(body, wrap(s.Description, inner-2)...)
 		}
@@ -735,6 +734,38 @@ func shortTime(s string) string {
 		return s
 	}
 	return t.Local().Format("01-02 15:04")
+}
+
+// TaskTimes はタスクの作成・着手・完了日時と所要時間を 1 行にまとめる。
+func TaskTimes(t *store.Task, now time.Time) string {
+	s := "created " + shortTime(t.CreatedAt)
+	if t.StartedAt != nil {
+		s += "   started " + shortTime(*t.StartedAt)
+	}
+	if t.DoneAt != nil {
+		s += "   " + t.Status + " " + shortTime(*t.DoneAt)
+	}
+	if d, ok := t.WorkTime(now); ok {
+		if t.Status == store.StatusDoing {
+			s += "   (elapsed " + FmtDuration(d) + ")"
+		} else {
+			s += "   (took " + FmtDuration(d) + ")"
+		}
+	}
+	return s
+}
+
+// FmtDuration は 3d4h / 2h05m / 12m / <1m の形に丸める。
+func FmtDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "<1m"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+	return fmt.Sprintf("%dd%dh", int(d.Hours())/24, int(d.Hours())%24)
 }
 
 func (m *model) View() string {
@@ -1612,10 +1643,7 @@ func (m *model) viewLines(width int) (string, []string) {
 	var out []string
 	add := func(ls ...string) { out = append(out, ls...) }
 	add(stHeadOn.Render(fit(t.Title, width)))
-	meta := "created " + shortTime(t.CreatedAt)
-	if t.DoneAt != nil {
-		meta += "   done " + shortTime(*t.DoneAt)
-	}
+	meta := TaskTimes(t, time.Now())
 	if t.ParentID != nil {
 		meta += fmt.Sprintf("   parent #%d", *t.ParentID)
 	}

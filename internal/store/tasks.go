@@ -5,24 +5,28 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ---- tasks ----
 
 // taskCols は FROM tasks（別名なし）で使う。サブタスク数・コメント数は相関サブクエリで算出する。
-const taskCols = `id, session_id, parent_id, title, body, status, note, position, created_at, updated_at, done_at,
+const taskCols = `id, session_id, parent_id, title, body, status, note, position, created_at, updated_at, started_at, done_at,
 	(SELECT COUNT(*) FROM tasks c WHERE c.parent_id = tasks.id),
 	(SELECT COUNT(*) FROM tasks c WHERE c.parent_id = tasks.id AND c.status IN ('done','skipped')),
 	(SELECT COUNT(*) FROM comments m WHERE m.task_id = tasks.id)`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var x Task
-	var doneAt sql.NullString
+	var startedAt, doneAt sql.NullString
 	var parent sql.NullInt64
-	err := sc.Scan(&x.ID, &x.SessionID, &parent, &x.Title, &x.Body, &x.Status, &x.Note, &x.Position, &x.CreatedAt, &x.UpdatedAt, &doneAt,
+	err := sc.Scan(&x.ID, &x.SessionID, &parent, &x.Title, &x.Body, &x.Status, &x.Note, &x.Position, &x.CreatedAt, &x.UpdatedAt, &startedAt, &doneAt,
 		&x.SubtasksTotal, &x.SubtasksDone, &x.CommentCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
+	}
+	if startedAt.Valid {
+		x.StartedAt = &startedAt.String
 	}
 	if doneAt.Valid {
 		x.DoneAt = &doneAt.String
@@ -31,6 +35,28 @@ func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 		x.ParentID = &parent.Int64
 	}
 	return &x, err
+}
+
+// WorkTime は着手から完了まで（作業中なら now まで）の経過時間。着手日時がなければ ok=false。
+func (t *Task) WorkTime(now time.Time) (d time.Duration, ok bool) {
+	if t.StartedAt == nil {
+		return 0, false
+	}
+	start, err := time.Parse(time.RFC3339, *t.StartedAt)
+	if err != nil {
+		return 0, false
+	}
+	switch {
+	case t.DoneAt != nil && finished(t.Status):
+		end, err := time.Parse(time.RFC3339, *t.DoneAt)
+		if err != nil {
+			return 0, false
+		}
+		return end.Sub(start), true
+	case t.Status == StatusDoing:
+		return now.Sub(start), true
+	}
+	return 0, false
 }
 
 func finished(status string) bool { return status == StatusDone || status == StatusSkipped }
@@ -258,12 +284,21 @@ func (s *Store) SetStatus(id int64, status string, note *string) (*Task, error) 
 			doneAt = t
 		}
 	}
+	// 着手日時は最初に doing にしたときに記録し、todo に戻したら消す（それ以外は保持）
+	var startedAt any
+	switch {
+	case status == StatusTodo:
+	case cur.StartedAt != nil:
+		startedAt = *cur.StartedAt
+	case status == StatusDoing:
+		startedAt = t
+	}
 	n := cur.Note
 	if note != nil {
 		n = *note
 	}
-	if _, err := s.DB.Exec(`UPDATE tasks SET status = ?, note = ?, done_at = ?, updated_at = ? WHERE id = ?`,
-		status, n, doneAt, t, id); err != nil {
+	if _, err := s.DB.Exec(`UPDATE tasks SET status = ?, note = ?, started_at = ?, done_at = ?, updated_at = ? WHERE id = ?`,
+		status, n, startedAt, doneAt, t, id); err != nil {
 		return nil, err
 	}
 	s.touchSession(s.DB, cur.SessionID)
@@ -466,7 +501,7 @@ func (s *Store) NextTask(sessionID int64, claim, fresh bool) (*Task, error) {
 		return cand, nil
 	}
 	t := now()
-	if _, err := tx.Exec(`UPDATE tasks SET status = 'doing', updated_at = ? WHERE id = ?`, t, cand.ID); err != nil {
+	if _, err := tx.Exec(`UPDATE tasks SET status = 'doing', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?`, t, t, cand.ID); err != nil {
 		return nil, err
 	}
 	s.touchSession(tx, sessionID)
