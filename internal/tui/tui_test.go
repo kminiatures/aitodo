@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -230,9 +231,21 @@ func TestSubtaskIndentCheckboxAndComment(t *testing.T) {
 		t.Fatal("comment form not opened")
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("レビューOK")})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // 複数行欄では改行
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2行目")})
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3行目")})
+	if m.form == nil {
+		t.Fatal("enter in multi-line field should not submit")
+	}
+	for i, l := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(l); w != 80 {
+			t.Fatalf("form line %d width %d", i, w)
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	cs, _ := st.ListComments(m.curTask().ID)
-	if len(cs) != 1 || cs[0].Body != "レビューOK" {
+	if len(cs) != 1 || cs[0].Body != "レビューOK\n2行目\n3行目" {
 		t.Fatalf("comments %+v (msg %q)", cs, m.msg)
 	}
 	// v → 詳細ビューにコメント全文が出る
@@ -247,8 +260,8 @@ func TestSubtaskIndentCheckboxAndComment(t *testing.T) {
 	// A → サブタスク追加
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("A")})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("孫")})
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // タイトル → 詳細
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if c := m.curTask(); c == nil || c.Title != "孫" || c.ParentID == nil {
 		t.Fatalf("subtask not added/selected: %+v msg=%q", c, m.msg)
 	}
@@ -391,3 +404,112 @@ func TestOverlayWide(t *testing.T) {
 		t.Fatalf("got %q", s)
 	}
 }
+
+// tab で入力欄 → OK → Cancel とフォーカスが移り、ボタン上の enter で押せる。
+func TestFormTabFocusesButtons(t *testing.T) {
+	m, st := setup(t)
+	m.focus = focusTasks
+	m.action("new-task")
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("tabで追加")})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // → 詳細
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // → OK
+	if m.form.focus != m.form.okIdx() {
+		t.Fatalf("focus = %d, want OK", m.form.focus)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("z")}) // ボタン上の文字入力は無視
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})                       // → Cancel
+	if m.form.focus != m.form.cancelIdx() {
+		t.Fatalf("focus = %d, want Cancel", m.form.focus)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // → 先頭の欄へ戻る
+	if m.form.focus != 0 {
+		t.Fatalf("focus = %d, want 0", m.form.focus)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyShiftTab}) // → Cancel
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})     // → OK
+	if m.form.focus != m.form.okIdx() {
+		t.Fatalf("focus = %d, want OK", m.form.focus)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.form != nil {
+		t.Fatal("form should be closed")
+	}
+	ts, _ := st.ListTasks(m.curSession().ID, nil)
+	if got := ts[len(ts)-1]; got.Title != "tabで追加" || got.Body != "" {
+		t.Fatalf("last task = %q / %q", got.Title, got.Body)
+	}
+
+	// Cancel 上の enter は保存せずに閉じる。
+	n := len(ts)
+	m.action("new-task")
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("保存しない")})
+	m.Update(tea.KeyMsg{Type: tea.KeyShiftTab}) // → Cancel
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.form != nil {
+		t.Fatal("form should be closed")
+	}
+	if ts, _ := st.ListTasks(m.curSession().ID, nil); len(ts) != n {
+		t.Fatalf("tasks = %d, want %d", len(ts), n)
+	}
+}
+
+// 確認ダイアログでも tab で Yes / No を切り替え、enter で押せる。
+func TestConfirmDialogTab(t *testing.T) {
+	m, st := setup(t)
+	m.focus = focusTasks
+	n := len(m.tasks)
+	m.action("delete")
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // → No
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.form != nil {
+		t.Fatal("dialog should be closed")
+	}
+	if ts, _ := st.ListTasks(m.curSession().ID, nil); len(ts) != n {
+		t.Fatalf("deleted on No: %d tasks", len(ts))
+	}
+	m.action("delete")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // 既定は Yes
+	if ts, _ := st.ListTasks(m.curSession().ID, nil); len(ts) != n-1 {
+		t.Fatalf("not deleted on Yes: %d tasks", len(ts))
+	}
+}
+
+// ctrl+enter（端末からは ctrl+j / CSI 列として届く）で、複数行欄やボタン上からでも保存する。
+func TestCtrlEnterSubmits(t *testing.T) {
+	m, st := setup(t)
+	m.focus = focusTasks
+	id := m.curTask().ID
+	for _, send := range []func(){
+		func() { m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ}) },
+		func() { m.Update(fakeCSI("\x1b[27;5;13~")) },
+		func() { m.Update(fakeCSI("\x1b[13;5u")) },
+	} {
+		m.action("comment")
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+		send()
+		if m.form != nil {
+			t.Fatal("ctrl+enter should submit")
+		}
+	}
+	cs, _ := st.ListComments(id)
+	if len(cs) != 3 || cs[0].Body != "a\nb" {
+		t.Fatalf("comments %+v", cs)
+	}
+
+	// ボタン（Cancel）上でも ctrl+enter は保存。
+	m.action("new-task")
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ボタン上から")})
+	m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	ts, _ := st.ListTasks(m.curSession().ID, nil)
+	if m.form != nil || ts[len(ts)-1].Title != "ボタン上から" {
+		t.Fatalf("form=%v last=%q", m.form != nil, ts[len(ts)-1].Title)
+	}
+}
+
+// fakeCSI は bubbletea の unknownCSISequenceMsg と同じ文字列表現を持つメッセージ。
+type fakeCSI string
+
+func (f fakeCSI) String() string { return fmt.Sprintf("?CSI%+v?", []byte(f)[2:]) }
