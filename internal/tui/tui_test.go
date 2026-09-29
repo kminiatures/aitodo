@@ -630,3 +630,54 @@ func TestFoldSubtasks(t *testing.T) {
 		}
 	}
 }
+
+// ? でヘルプを開き、スクロールして esc / クリックで閉じる。幅は崩れない。
+func TestHelpModal(t *testing.T) {
+	m, _ := setup(t)
+	press := func(s string) { m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
+	checkWidth := func(w int) {
+		t.Helper()
+		for i, l := range strings.Split(m.View(), "\n") {
+			if lw := lipgloss.Width(l); lw != w {
+				t.Fatalf("line %d width %d: %q", i, lw, l)
+			}
+		}
+	}
+	press("?")
+	if !m.help || !strings.Contains(m.View(), "Help") || !strings.Contains(m.View(), "セッション / タスク枠を切替") {
+		t.Fatalf("help not shown:\n%s", m.View())
+	}
+	checkWidth(80)
+	// ヘルプ中のキーは下の画面に効かない
+	idx := m.tIdx
+	press("j")
+	press("j")
+	if m.tIdx != idx || m.helpOff != 2 {
+		t.Fatalf("tIdx=%d helpOff=%d", m.tIdx, m.helpOff)
+	}
+	press("G")
+	m.View()
+	if m.helpOff == 0 || m.helpOff > 100 {
+		t.Fatalf("helpOff after G = %d", m.helpOff)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.help {
+		t.Fatal("esc should close help")
+	}
+	// 広い画面では 2 列、狭い画面では 1 列でも幅が崩れない
+	for _, w := range []int{140, 50} {
+		m.Update(tea.WindowSizeMsg{Width: w, Height: 30})
+		press("?")
+		checkWidth(w)
+		click(m, 0, 0)
+		if m.help {
+			t.Fatal("click should close help")
+		}
+	}
+	// 詳細ビューからも開ける
+	press("v")
+	press("?")
+	if !m.help || m.view == nil {
+		t.Fatal("? in view should open help over view")
+	}
+}

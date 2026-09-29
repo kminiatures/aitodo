@@ -111,6 +111,9 @@ type model struct {
 	view *taskView // タスク詳細（コメント全文）ビュー
 	menu *ctxMenu  // 右クリックのコンテキストメニュー
 
+	help    bool // キー操作のヘルプ（? で開閉）
+	helpOff int  // ヘルプのスクロール位置
+
 	lastClickAt time.Time
 	lastClickY  int
 
@@ -602,18 +605,24 @@ func (m *model) render() ([]string, []region) {
 	case m.form != nil:
 		help = stDim.Render(fit(" tab/↑↓: move field  enter: next/OK  ctrl+enter/ctrl+s: save  esc: cancel  (mouse: click field / buttons)", m.w))
 	case m.view != nil:
-		help = stDim.Render(fit(" ↑↓/jk/wheel scroll  c comment  space done  s start  A subtask  e edit  esc/v close", m.w))
+		help = stDim.Render(fit(" ↑↓/jk/wheel scroll  c comment  space done  s start  A subtask  e edit  esc/v close  ? help", m.w))
 	case m.focus == focusSessions:
-		help = stDim.Render(fit(" ↑↓/jk move  tab/→ tasks  n new  e edit  w workdir  d delete  z archive  H show archived  q quit", m.w))
+		help = stDim.Render(fit(" ↑↓/jk move  tab/→ tasks  n new  e edit  w workdir  d delete  z archive  H show archived  ? help  q quit", m.w))
 	default:
-		help = stDim.Render(fit(" ↑↓/jk move  ←→ fold  [ ] fold all  space done  s start  b block  - skip  a add  A sub  c comment  v view  e edit  J/K reorder  f hide done  q quit", m.w))
+		help = stDim.Render(fit(" ? help  ↑↓/jk move  ←→ fold  [ ] fold all  space done  s start  b block  - skip  a add  A sub  c comment  v view  e edit  J/K reorder  f hide done  q quit", m.w))
 	}
 	if m.menu != nil {
 		help = stDim.Render(fit(" ↑↓/jk 選択  enter 実行  esc 閉じる  (右端のキーでも実行)", m.w))
 	}
+	if m.help {
+		help = stDim.Render(fit(" ↑↓/jk/wheel スクロール  esc/?/q 閉じる", m.w))
+	}
 	lines[g.helpY] = help
 	if m.menu != nil {
 		m.renderMenu(lines, &regs)
+	}
+	if m.help {
+		m.renderHelp(lines)
 	}
 	return lines, regs
 }
@@ -919,6 +928,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	case tea.KeyMsg:
+		if m.help {
+			return m, m.helpKey(msg)
+		}
 		if m.menu != nil {
 			cmd := m.menuKey(msg)
 			m.ensureVisible()
@@ -1018,6 +1030,8 @@ func (m *model) key(k tea.KeyMsg) tea.Cmd {
 	case "r", "ctrl+r":
 		m.reload()
 		m.setMsg("reloaded")
+	case "?":
+		m.help, m.helpOff = true, 0
 	}
 	return nil
 }
@@ -1074,6 +1088,18 @@ func (m *model) mouse(ev tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	if ev.Action != tea.MouseActionPress {
+		return nil
+	}
+	// ヘルプ表示中: ホイールでスクロール、クリックで閉じる
+	if m.help {
+		switch ev.Button {
+		case tea.MouseButtonWheelUp:
+			m.helpOff = max(0, m.helpOff-3)
+		case tea.MouseButtonWheelDown:
+			m.helpOff += 3
+		default:
+			m.help = false
+		}
 		return nil
 	}
 	// メニュー表示中: 項目クリックで実行、それ以外のクリックで閉じる
@@ -1873,6 +1899,8 @@ func (m *model) viewKey(k tea.KeyMsg) tea.Cmd {
 	m.msg = ""
 	rows := max(1, m.geom().buttonsY-3)
 	switch k.String() {
+	case "?":
+		m.help, m.helpOff = true, 0
 	case "esc", "q", "v", "o", "enter":
 		m.view = nil
 	case "ctrl+c":
@@ -2064,4 +2092,168 @@ func overlay(line string, x int, s string, w int) string {
 		right = ansi.TruncateLeft(line, x+w+1, " ")
 	}
 	return left + "\x1b[0m" + s + "\x1b[0m" + right
+}
+
+// ---------- help ----------
+
+type helpSec struct {
+	title string
+	rows  [][2]string // {キー, 説明}
+}
+
+// ヘルプの内容。2 列で表示できるときは左列 helpLeft、右列 helpRight。
+var (
+	helpLeft = []helpSec{
+		{"全体", [][2]string{
+			{"tab", "セッション / タスク枠を切替"},
+			{"r", "再読み込み"},
+			{"?", "このヘルプ"},
+			{"q  ctrl+c", "終了"},
+		}},
+		{"セッション枠", [][2]string{
+			{"↑↓  jk", "移動"},
+			{"g G  pgup pgdn", "先頭 / 末尾 / ページ移動"},
+			{"→ l  enter", "タスク枠へ"},
+			{"n", "新しいセッション"},
+			{"a", "タスク追加"},
+			{"e", "編集"},
+			{"w", "作業フォルダ"},
+			{"z", "アーカイブ / 解除"},
+			{"H", "アーカイブの表示切替"},
+			{"d", "削除"},
+		}},
+		{"詳細ビュー (v)", [][2]string{
+			{"↑↓  jk  pgup pgdn", "スクロール"},
+			{"space  s", "完了 / 着手"},
+			{"c  A  e", "コメント / サブタスク / 編集"},
+			{"esc  q  v", "閉じる"},
+		}},
+		{"フォーム", [][2]string{
+			{"tab  shift+tab", "項目移動"},
+			{"ctrl+enter  ctrl+s", "保存"},
+			{"esc", "キャンセル"},
+		}},
+	}
+	helpRight = []helpSec{
+		{"タスク枠", [][2]string{
+			{"↑↓  jk", "移動"},
+			{"g G  pgup pgdn", "先頭 / 末尾 / ページ移動"},
+			{"← h", "畳む → 親へ → セッション枠へ"},
+			{"→ l", "開く → 最初の子へ"},
+			{"[  ]", "すべて畳む / すべて開く"},
+			{"space  x", "完了 / 戻す"},
+			{"s", "着手 / 戻す"},
+			{"b", "ブロック"},
+			{"-", "スキップ"},
+			{"a", "タスク追加"},
+			{"A", "サブタスク追加"},
+			{"c", "コメント"},
+			{"v  o", "詳細ビュー"},
+			{"e  enter", "編集"},
+			{"K J  shift+↑↓", "並べ替え"},
+			{"d", "削除"},
+			{"f", "完了の表示切替"},
+		}},
+		{"マウス", [][2]string{
+			{"クリック", "選択 / [ ] で完了 / ▸▾ で開閉"},
+			{"ダブルクリック", "編集（セッションはタスク枠へ）"},
+			{"右クリック", "メニュー"},
+			{"ホイール", "スクロール"},
+			{"詳細枠の上辺ドラッグ", "高さを変える"},
+		}},
+	}
+)
+
+// helpColumn はセクションを幅 w の行に並べる。kw はキー欄の幅。
+func helpColumn(secs []helpSec, kw, w int) []string {
+	var ls []string
+	for i, sec := range secs {
+		if i > 0 {
+			ls = append(ls, strings.Repeat(" ", w))
+		}
+		ls = append(ls, stHeadOn.Render(fit(sec.title, w)))
+		for _, r := range sec.rows {
+			ls = append(ls, stLabel.Render(fit(" "+r[0], kw+1))+"  "+fit(r[1], w-kw-3))
+		}
+	}
+	return ls
+}
+
+// helpBody はヘルプの本文行（幅は 2 列 / 1 列のどちらか）を返す。
+func (m *model) helpBody() ([]string, int) {
+	kw, dw := 0, 0
+	for _, sec := range append(append([]helpSec{}, helpLeft...), helpRight...) {
+		for _, r := range sec.rows {
+			kw = max(kw, runewidth.StringWidth(r[0]))
+			dw = max(dw, runewidth.StringWidth(r[1]))
+		}
+	}
+	colW := 1 + kw + 2 + dw
+	const gap = 4
+	if 2*colW+gap+4 <= m.w {
+		l, r := helpColumn(helpLeft, kw, colW), helpColumn(helpRight, kw, colW)
+		body := make([]string, max(len(l), len(r)))
+		for i := range body {
+			a, b := strings.Repeat(" ", colW), ""
+			if i < len(l) {
+				a = l[i]
+			}
+			if i < len(r) {
+				b = r[i]
+			}
+			body[i] = a + strings.Repeat(" ", gap) + b
+		}
+		return body, 2*colW + gap
+	}
+	colW = min(colW, m.w-4)
+	return helpColumn(append(append([]helpSec{}, helpLeft...), helpRight...), min(kw, colW/2), colW), colW
+}
+
+// renderHelp はヘルプを画面中央に重ねて描く。
+func (m *model) renderHelp(lines []string) {
+	body, bw := m.helpBody()
+	inner := bw + 2
+	w := inner + 2
+	rows := min(len(body), len(lines)-4)
+	m.helpOff = clamp(m.helpOff, 0, max(0, len(body)-rows))
+	x := max(0, (m.w-w)/2)
+	y := max(1, (len(lines)-rows-2)/2)
+	put := func(row int, s string) {
+		if row >= 0 && row < len(lines) {
+			lines[row] = overlay(lines[row], x, s, w)
+		}
+	}
+	put(y, boxTop("Help", w, true))
+	for i := 0; i < rows; i++ {
+		l := body[m.helpOff+i]
+		pad := max(0, bw-lipgloss.Width(l))
+		put(y+1+i, side(true)+stMenu.Render(" ")+l+stMenu.Render(strings.Repeat(" ", pad)+" ")+side(true))
+	}
+	sb := ""
+	if len(body) > rows {
+		sb = fmt.Sprintf("%d-%d/%d", m.helpOff+1, m.helpOff+rows, len(body))
+	}
+	put(y+rows+1, boxBottom(w, true, sb))
+}
+
+func (m *model) helpKey(k tea.KeyMsg) tea.Cmd {
+	switch k.String() {
+	case "esc", "q", "?", "enter":
+		m.help = false
+	case "ctrl+c":
+		return tea.Quit
+	case "up", "k":
+		m.helpOff = max(0, m.helpOff-1)
+	case "down", "j":
+		m.helpOff++
+	case "pgup", "ctrl+u":
+		m.helpOff = max(0, m.helpOff-10)
+	case "pgdown", "ctrl+d", " ":
+		m.helpOff += 10
+	case "home", "g":
+		m.helpOff = 0
+	case "end", "G":
+		m.helpOff = 1 << 20
+	}
+	return nil
 }
