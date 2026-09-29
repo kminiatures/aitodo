@@ -122,7 +122,7 @@ func tick() tea.Cmd {
 // Run は TUI を起動する。initialSession が 0 でなければそのセッションを選択した状態で開く。
 func Run(st *store.Store, initialSession int64) error {
 	m := newModel(st, initialSession)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	_, err := p.Run()
 	return err
 }
@@ -916,6 +916,10 @@ func (m *model) selectSession(i int) {
 }
 
 func (m *model) mouse(ev tea.MouseMsg) tea.Cmd {
+	// ボタンを押していない移動はメニューのホバー以外では使わない（描画し直さずに済ませる）
+	if ev.Action == tea.MouseActionMotion && !m.dragDetail && m.menu == nil {
+		return nil
+	}
 	_, regs := m.render()
 	g := m.geom()
 	// 詳細枠の上辺ドラッグで高さを変更
@@ -927,6 +931,15 @@ func (m *model) mouse(ev tea.MouseMsg) tea.Cmd {
 			m.dragDetail = false
 			if err := m.st.SetSetting(settingDetailH, strconv.Itoa(m.detailH)); err != nil {
 				m.setErr(err)
+			}
+		}
+		return nil
+	}
+	// メニュー表示中: マウスが乗った項目をハイライト
+	if m.menu != nil && ev.Action == tea.MouseActionMotion {
+		for _, r := range regs {
+			if r.kind == rMenuItem && r.y == ev.Y && ev.X >= r.x0 && ev.X < r.x1 {
+				m.menu.sel = r.idx
 			}
 		}
 		return nil

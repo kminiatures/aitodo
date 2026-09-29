@@ -364,6 +364,23 @@ func TestContextMenu(t *testing.T) {
 		t.Fatalf("status = %s, want done", tk.Status)
 	}
 
+	// ホバーで項目がハイライトされ、外れても最後の項目のまま
+	rightClick(m, g.tx+10, g.paneTop+1)
+	_, regs = m.render()
+	for _, r := range regs {
+		if r.kind == rMenuItem && r.idx == 3 {
+			m.Update(tea.MouseMsg{X: r.x0 + 1, Y: r.y, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone})
+		}
+	}
+	if m.menu == nil || m.menu.sel != 3 {
+		t.Fatalf("hover: menu=%+v", m.menu)
+	}
+	m.Update(tea.MouseMsg{X: 0, Y: 0, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone})
+	if m.menu == nil || m.menu.sel != 3 {
+		t.Fatalf("hover outside: menu=%+v", m.menu)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
 	// キー操作: ↓ enter で 2 番目（着手）
 	rightClick(m, g.tx+10, g.paneTop+1)
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})
