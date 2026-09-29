@@ -68,6 +68,7 @@ const (
 	rSession regionKind = iota
 	rTask
 	rCheckbox
+	rFold
 	rButton
 	rFormField
 	rFormButton
@@ -102,6 +103,10 @@ type model struct {
 	hideDone     bool
 	wantSession  int64
 
+	collapsed map[int64]bool     // 畳んでいるタスク（TUI 内だけの表示状態）
+	parent    map[int64]int64    // タスク ID → 親 ID（現セッションの全タスク）
+	tree      map[int64]treeInfo // 表示中タスクの子の有無など
+
 	form *form
 	view *taskView // タスク詳細（コメント全文）ビュー
 	menu *ctxMenu  // 右クリックのコンテキストメニュー
@@ -111,6 +116,12 @@ type model struct {
 
 	detailH    int  // ユーザーがドラッグで決めた詳細枠の高さ（0 = 既定）
 	dragDetail bool // 詳細枠の上辺をドラッグ中
+}
+
+// treeInfo は表示中タスクの折りたたみに関する情報。
+type treeInfo struct {
+	hasKids        bool // 表示対象の子がある（開閉できる）
+	doing, blocked int  // 畳んで隠れている子孫のうち着手中・ブロック中の数
 }
 
 type tickMsg time.Time
@@ -128,7 +139,7 @@ func Run(st *store.Store, initialSession int64) error {
 }
 
 func newModel(st *store.Store, initialSession int64) *model {
-	m := &model{st: st, w: 100, h: 30, wantSession: initialSession}
+	m := &model{st: st, w: 100, h: 30, wantSession: initialSession, collapsed: map[int64]bool{}}
 	if v, _ := st.GetSetting(settingDetailH); v != "" {
 		m.detailH, _ = strconv.Atoi(v)
 	}
@@ -183,11 +194,17 @@ func (m *model) reload() {
 		}
 	}
 	m.tasks = nil
+	m.parent, m.tree = map[int64]int64{}, map[int64]treeInfo{}
 	if s := m.curSession(); s != nil {
 		ts, err := m.st.ListTasks(s.ID, nil)
 		if err != nil {
 			m.setErr(err)
 			return
+		}
+		for _, t := range ts {
+			if t.ParentID != nil {
+				m.parent[t.ID] = *t.ParentID
+			}
 		}
 		if m.hideDone {
 			f := ts[:0]
@@ -198,18 +215,101 @@ func (m *model) reload() {
 			}
 			ts = f
 		}
-		m.tasks = ts
+		m.tasks = m.fold(ts)
 	}
 	m.tIdx = clamp(m.tIdx, 0, len(m.tasks)-1)
-	for i := range m.tasks {
-		if m.tasks[i].ID == selT {
-			m.tIdx = i
+	// 選択していたタスクが畳まれて隠れたら、見えている一番近い祖先を選ぶ
+	for id, found := selT, false; id != 0 && !found; id = m.parent[id] {
+		for i := range m.tasks {
+			if m.tasks[i].ID == id {
+				m.tIdx, found = i, true
+			}
 		}
 	}
 	// ここでは選択行へスクロールを戻さない（自動更新がホイールスクロールを打ち消さないように）
 	g := m.geom()
 	m.sOff = clamp(m.sOff, 0, max(0, len(m.sessions)-g.rows))
 	m.tOff = clamp(m.tOff, 0, max(0, len(m.tasks)-g.rows))
+}
+
+// fold は畳んだタスクの子孫を取り除き、m.tree を作る。ts は木の順（親の直後に子孫）。
+func (m *model) fold(ts []store.Task) []store.Task {
+	vis := make([]store.Task, 0, len(ts))
+	var owner int64 // 子孫を隠している畳んだタスク
+	ownerDepth := -1
+	for i, t := range ts {
+		if ownerDepth >= 0 && t.Depth > ownerDepth {
+			ti := m.tree[owner]
+			switch t.Status {
+			case store.StatusDoing:
+				ti.doing++
+			case store.StatusBlocked:
+				ti.blocked++
+			}
+			m.tree[owner] = ti
+			continue
+		}
+		ownerDepth = -1
+		if i+1 < len(ts) && ts[i+1].Depth > t.Depth {
+			m.tree[t.ID] = treeInfo{hasKids: true}
+			if m.collapsed[t.ID] {
+				owner, ownerDepth = t.ID, t.Depth
+			}
+		}
+		vis = append(vis, t)
+	}
+	return vis
+}
+
+// reveal は id の祖先をすべて開く。開いたものがあれば true。
+func (m *model) reveal(id int64) bool {
+	changed := false
+	for p := m.parent[id]; p != 0; p = m.parent[p] {
+		if m.collapsed[p] {
+			delete(m.collapsed, p)
+			changed = true
+		}
+	}
+	return changed
+}
+
+// foldLeft は ← の動き: 開いた親を畳む → 親へ移る → セッション枠へ移る。
+func (m *model) foldLeft() {
+	t := m.curTask()
+	if t == nil {
+		m.focus = focusSessions
+		return
+	}
+	if m.tree[t.ID].hasKids && !m.collapsed[t.ID] {
+		m.collapsed[t.ID] = true
+		m.reload()
+		return
+	}
+	if p := m.parent[t.ID]; p != 0 {
+		for i := range m.tasks {
+			if m.tasks[i].ID == p {
+				m.tIdx = i
+				m.ensureVisible()
+				return
+			}
+		}
+	}
+	m.focus = focusSessions
+}
+
+// foldRight は → の動き: 畳んだ親を開く → 最初の子へ移る。
+func (m *model) foldRight() {
+	t := m.curTask()
+	if t == nil || !m.tree[t.ID].hasKids {
+		return
+	}
+	if m.collapsed[t.ID] {
+		delete(m.collapsed, t.ID)
+		m.reload()
+		return
+	}
+	m.tIdx++
+	m.ensureVisible()
 }
 
 func clamp(v, lo, hi int) int {
@@ -506,7 +606,7 @@ func (m *model) render() ([]string, []region) {
 	case m.focus == focusSessions:
 		help = stDim.Render(fit(" ↑↓/jk move  tab/→ tasks  n new  e edit  w workdir  d delete  z archive  H show archived  q quit", m.w))
 	default:
-		help = stDim.Render(fit(" ↑↓/jk move  space done  s start  b block  - skip  a add  A sub  c comment  v view  e edit  J/K reorder  f hide done  q quit", m.w))
+		help = stDim.Render(fit(" ↑↓/jk move  ←→ fold  [ ] fold all  space done  s start  b block  - skip  a add  A sub  c comment  v view  e edit  J/K reorder  f hide done  q quit", m.w))
 	}
 	if m.menu != nil {
 		help = stDim.Render(fit(" ↑↓/jk 選択  enter 実行  esc 閉じる  (右端のキーでも実行)", m.w))
@@ -591,6 +691,21 @@ func (m *model) renderPanes(g geom, lines []string, regs *[]region) {
 			if t.CommentCount > 0 {
 				suffix += fmt.Sprintf("  ✎%d", t.CommentCount)
 			}
+			// 開閉マークはチェックボックス直前の空白に置く（子のない行は今までどおり）
+			ti := m.tree[t.ID]
+			fold := " "
+			if ti.hasKids {
+				fold = "▾"
+				if m.collapsed[t.ID] {
+					fold = "▸"
+					if ti.doing > 0 {
+						suffix += fmt.Sprintf("  >%d", ti.doing)
+					}
+					if ti.blocked > 0 {
+						suffix += fmt.Sprintf("  !%d", ti.blocked)
+					}
+				}
+			}
 			prefixW := 1 + indW + 3 + 1 + runewidth.StringWidth(idS) + 1
 			rest := tInner - prefixW - runewidth.StringWidth(suffix)
 			if rest < 4 { // 狭いときは付加情報を諦める
@@ -611,19 +726,24 @@ func (m *model) renderPanes(g geom, lines []string, regs *[]region) {
 			var txt string
 			switch {
 			case i == m.tIdx && tOn:
-				txt = stSel.Render(" " + ind + mark + " " + idS + " " + title + suffix)
+				txt = stSel.Render(ind + fold + mark + " " + idS + " " + title + suffix)
 			case i == m.tIdx:
-				txt = stSelDim.Render(" " + ind + mark + " " + idS + " " + title + suffix)
+				txt = stSelDim.Render(ind + fold + mark + " " + idS + " " + title + suffix)
 			default:
-				txt = " " + ind + st.UnsetStrikethrough().Render(mark) + " " + stDim.Render(idS) + " " + st.Render(title) + stDim.Render(suffix)
+				txt = ind + fold + st.UnsetStrikethrough().Render(mark) + " " + stDim.Render(idS) + " " + st.Render(title) + stDim.Render(suffix)
 			}
 			cell = txt
 			x0 := g.tx + 1
 			cb := x0 + indW // " [x]" の開始位置（インデント分ずらす）
-			*regs = append(*regs,
-				region{y: y, x0: x0, x1: cb, kind: rTask, idx: i},
-				region{y: y, x0: cb, x1: cb + 4, kind: rCheckbox, idx: i},
-				region{y: y, x0: cb + 4, x1: x0 + tInner, kind: rTask, idx: i})
+			*regs = append(*regs, region{y: y, x0: x0, x1: cb, kind: rTask, idx: i})
+			if ti.hasKids {
+				*regs = append(*regs,
+					region{y: y, x0: cb, x1: cb + 1, kind: rFold, idx: i},
+					region{y: y, x0: cb + 1, x1: cb + 4, kind: rCheckbox, idx: i})
+			} else {
+				*regs = append(*regs, region{y: y, x0: cb, x1: cb + 4, kind: rCheckbox, idx: i})
+			}
+			*regs = append(*regs, region{y: y, x0: cb + 4, x1: x0 + tInner, kind: rTask, idx: i})
 		} else if r == 0 && len(m.tasks) == 0 {
 			hint := " (no tasks) press a to add"
 			if m.curSession() == nil {
@@ -831,9 +951,18 @@ func (m *model) key(k tea.KeyMsg) tea.Cmd {
 	case "tab", "shift+tab":
 		m.focus = 1 - m.focus
 	case "right", "l":
+		if m.focus == focusTasks {
+			m.foldRight()
+		}
 		m.focus = focusTasks
 	case "left", "h":
-		m.focus = focusSessions
+		if m.focus == focusTasks {
+			m.foldLeft()
+		}
+	case "[":
+		return m.action("collapse-all")
+	case "]":
+		return m.action("expand-all")
 	case "enter":
 		if m.focus == focusSessions {
 			m.focus = focusTasks
@@ -1014,6 +1143,10 @@ func (m *model) mouse(ev tea.MouseMsg) tea.Cmd {
 			m.focus = focusTasks
 			m.tIdx = r.idx
 			return m.action("toggle-done")
+		case rFold:
+			m.focus = focusTasks
+			m.tIdx = r.idx
+			return m.action("toggle-fold")
 		case rTask:
 			m.focus = focusTasks
 			m.tIdx = r.idx
@@ -1175,6 +1308,21 @@ func (m *model) action(a string) tea.Cmd {
 		m.reload()
 	case "hide-done":
 		m.hideDone = !m.hideDone
+		m.reload()
+	case "toggle-fold":
+		if t == nil || !m.tree[t.ID].hasKids {
+			m.setErr(fmt.Errorf("サブタスクがありません"))
+			return nil
+		}
+		m.collapsed[t.ID] = !m.collapsed[t.ID]
+		m.reload()
+	case "collapse-all":
+		for _, p := range m.parent {
+			m.collapsed[p] = true
+		}
+		m.reload()
+	case "expand-all":
+		clear(m.collapsed)
 		m.reload()
 	case "move-up", "move-down":
 		if t == nil || m.hideDone {
@@ -1623,6 +1771,9 @@ func layoutCandidates(cands []string, width, maxLines int) ([]string, []region) 
 }
 
 func (m *model) selectTask(id int64) {
+	if m.reveal(id) {
+		m.reload()
+	}
 	for i := range m.tasks {
 		if m.tasks[i].ID == id {
 			m.tIdx = i
@@ -1778,7 +1929,7 @@ func (m *model) rightClick(ev tea.MouseMsg, regs []region, g geom) {
 			m.focus = focusSessions
 			m.selectSession(r.idx)
 			items = m.sessionMenu()
-		case rTask, rCheckbox:
+		case rTask, rCheckbox, rFold:
 			m.focus = focusTasks
 			m.tIdx = r.idx
 			items = taskMenu
@@ -1792,7 +1943,8 @@ func (m *model) rightClick(ev tea.MouseMsg, regs []region, g geom) {
 					items = []menuItem{{"+ セッション", "n", "new-session"}, {"アーカイブ表示切替", "H", "show-archived"}}
 				} else {
 					m.focus = focusTasks
-					items = []menuItem{{"+ タスク", "a", "new-task"}, {"完了の表示切替", "f", "hide-done"}}
+					items = []menuItem{{"+ タスク", "a", "new-task"}, {"完了の表示切替", "f", "hide-done"},
+						{"すべてたたむ", "[", "collapse-all"}, {"すべて開く", "]", "expand-all"}}
 				}
 			}
 		}
@@ -1808,6 +1960,7 @@ var taskMenu = []menuItem{
 	{"! ブロック", "b", "toggle-blocked"},
 	{"- スキップ", "-", "toggle-skipped"},
 	{"+ サブタスク", "A", "new-subtask"},
+	{"たたむ / 開く", "←→", "toggle-fold"},
 	{"コメント", "c", "comment"},
 	{"詳細を見る", "v", "view"},
 	{"編集", "e", "edit"},

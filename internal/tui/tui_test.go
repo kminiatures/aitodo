@@ -556,3 +556,77 @@ func TestTaskTimes(t *testing.T) {
 		}
 	}
 }
+
+// ←→ でサブタスクを畳む・開く。畳んだ行は ▸ と隠れた着手中の数を出す。
+func TestFoldSubtasks(t *testing.T) {
+	m, st := setup(t)
+	parent := m.tasks[0]
+	c1, _ := st.AddSubtask(parent.ID, "子1", "")
+	c2, _ := st.AddSubtask(parent.ID, "子2", "")
+	st.AddSubtask(c2.ID, "孫", "")
+	st.SetStatus(c1.ID, store.StatusDoing, nil)
+	m.reload()
+	key := func(k tea.KeyType) { m.Update(tea.KeyMsg{Type: k}) }
+	if len(m.tasks) != 6 || !strings.Contains(m.View(), "▾[ ] #1") {
+		t.Fatalf("expanded: %d tasks\n%s", len(m.tasks), m.View())
+	}
+
+	// 子の上で ← → 親へ、親の上で ← → 畳む
+	m.selectTask(c1.ID)
+	key(tea.KeyLeft)
+	if m.curTask().ID != parent.ID || m.focus != focusTasks {
+		t.Fatalf("left on child should select parent: %+v", m.curTask())
+	}
+	key(tea.KeyLeft)
+	if len(m.tasks) != 3 || !strings.Contains(m.View(), "▸[ ] #1") || !strings.Contains(m.View(), ">1") {
+		t.Fatalf("collapsed: %d tasks\n%s", len(m.tasks), m.View())
+	}
+	// トップレベルで ← → セッション枠へ
+	key(tea.KeyLeft)
+	if m.focus != focusSessions {
+		t.Fatal("left on collapsed top-level should focus sessions")
+	}
+	// → でタスク枠へ戻り、もう一度 → で開く、さらに → で最初の子へ
+	key(tea.KeyRight)
+	key(tea.KeyRight)
+	if len(m.tasks) != 6 {
+		t.Fatalf("right should expand: %d", len(m.tasks))
+	}
+	key(tea.KeyRight)
+	if m.curTask().ID != c1.ID {
+		t.Fatalf("right on expanded should go to first child: %+v", m.curTask())
+	}
+
+	// [ ですべて畳むと、選択は見えている祖先へ移る
+	m.selectTask(c2.ID)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	if len(m.tasks) != 3 || m.curTask().ID != parent.ID {
+		t.Fatalf("collapse-all: %d tasks, cur %+v", len(m.tasks), m.curTask())
+	}
+	// 畳んだ親にサブタスクを足すと開いて選択される
+	sub, _ := st.AddSubtask(c2.ID, "追加", "")
+	m.reload()
+	m.selectTask(sub.ID)
+	if m.curTask().ID != sub.ID {
+		t.Fatalf("selectTask should reveal: %+v", m.curTask())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+	if len(m.tasks) != 7 {
+		t.Fatalf("expand-all: %d", len(m.tasks))
+	}
+
+	// ▾ をクリックで畳む（チェックボックスは状態を変えない）
+	g := m.geom()
+	click(m, g.tx+1, g.paneTop+1)
+	if len(m.tasks) != 3 {
+		t.Fatalf("click fold: %d", len(m.tasks))
+	}
+	if tk, _ := st.GetTask(parent.ID); tk.Status != store.StatusTodo {
+		t.Fatalf("fold click changed status: %s", tk.Status)
+	}
+	for i, l := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(l); w != 80 {
+			t.Fatalf("line %d width %d", i, w)
+		}
+	}
+}
