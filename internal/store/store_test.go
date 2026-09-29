@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func open(t *testing.T) *Store {
@@ -189,5 +190,42 @@ func TestMigrateFromV1(t *testing.T) {
 	}
 	if _, err := st.AddComment(l[0].ID, "ai", "ok"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 着手日時は初めて doing になったときに記録され、完了後も保持、todo に戻すと消える。
+func TestStartedAt(t *testing.T) {
+	st := open(t)
+	s, _ := st.CreateSession("s", "", "")
+	st.AddTasks(s.ID, []NewTask{{Title: "1"}, {Title: "2"}})
+	a, _ := st.NextTask(s.ID, true, false)
+	if a.StartedAt == nil || a.DoneAt != nil {
+		t.Fatalf("claim should set started_at: %+v", a)
+	}
+	started := *a.StartedAt
+	st.SetStatus(a.ID, StatusBlocked, nil)
+	a, _ = st.SetStatus(a.ID, StatusDoing, nil)
+	if a.StartedAt == nil || *a.StartedAt != started {
+		t.Fatalf("started_at should be kept: %v", a.StartedAt)
+	}
+	a, _ = st.SetStatus(a.ID, StatusDone, nil)
+	if a.StartedAt == nil || *a.StartedAt != started || a.DoneAt == nil {
+		t.Fatalf("done: %+v", a)
+	}
+	if d, ok := a.WorkTime(time.Now()); !ok || d < 0 {
+		t.Fatalf("work time %v %v", d, ok)
+	}
+	a, _ = st.SetStatus(a.ID, StatusTodo, nil)
+	if a.StartedAt != nil || a.DoneAt != nil {
+		t.Fatalf("todo should clear times: %+v", a)
+	}
+	// 着手せずに完了したタスクは着手日時なし
+	ts, _ := st.ListTasks(s.ID, nil)
+	b, _ := st.SetStatus(ts[1].ID, StatusDone, nil)
+	if b.StartedAt != nil {
+		t.Fatalf("started_at should stay nil: %v", *b.StartedAt)
+	}
+	if _, ok := b.WorkTime(time.Now()); ok {
+		t.Fatal("no work time without started_at")
 	}
 }

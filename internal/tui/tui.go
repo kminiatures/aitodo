@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -38,6 +40,7 @@ var (
 	stBlocked  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	stSkipped  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	stButton   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("238"))
+	stButtonOn = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("6")).Bold(true)
 	stErr      = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
 	stOK       = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	stLabel    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
@@ -490,10 +493,14 @@ func (m *model) render() ([]string, []region) {
 		help = stErr.Render(fit(" ✗ "+m.msg, m.w))
 	case m.msg != "":
 		help = stOK.Render(fit(" "+m.msg, m.w))
+	case m.form != nil && m.form.onButton():
+		help = stDim.Render(fit(" enter/space: 押す  ←→: ボタン切替  tab/shift+tab: 項目移動  ctrl+enter/ctrl+s: 保存  esc: キャンセル", m.w))
 	case m.form != nil && len(m.form.fields) > 0 && m.form.fields[m.form.focus].dir:
-		help = stDim.Render(fit(" tab: フォルダ補完（候補はクリックでも選択）  ↑↓/shift+tab: 項目移動  enter: 次/OK  ctrl+s: 保存  esc: キャンセル", m.w))
+		help = stDim.Render(fit(" tab: フォルダ補完（候補はクリックでも選択）  ↑↓/shift+tab: 項目移動  enter: 次/OK  ctrl+enter/ctrl+s: 保存  esc: キャンセル", m.w))
+	case m.form != nil && len(m.form.fields) > 0 && m.form.fields[m.form.focus].multi:
+		help = stDim.Render(fit(" enter: 改行  ctrl+enter/ctrl+s: 保存  tab/shift+tab: 項目移動  esc: キャンセル", m.w))
 	case m.form != nil:
-		help = stDim.Render(fit(" tab/↑↓: move field  enter: next/OK  ctrl+s: save  esc: cancel  (mouse: click field / buttons)", m.w))
+		help = stDim.Render(fit(" tab/↑↓: move field  enter: next/OK  ctrl+enter/ctrl+s: save  esc: cancel  (mouse: click field / buttons)", m.w))
 	case m.view != nil:
 		help = stDim.Render(fit(" ↑↓/jk/wheel scroll  c comment  space done  s start  A subtask  e edit  esc/v close", m.w))
 	case m.focus == focusSessions:
@@ -640,9 +647,6 @@ func (m *model) renderDetail(g geom, lines []string) {
 	var body []string
 	if t := m.curTask(); m.focus == focusTasks && t != nil {
 		title = fmt.Sprintf("Task #%d  %s", t.ID, t.Status)
-		if t.DoneAt != nil {
-			title += "  done " + shortTime(*t.DoneAt)
-		}
 		if t.SubtasksTotal > 0 {
 			title += fmt.Sprintf("  subtasks %d/%d", t.SubtasksDone, t.SubtasksTotal)
 		}
@@ -650,6 +654,7 @@ func (m *model) renderDetail(g geom, lines []string) {
 			title += fmt.Sprintf("  ✎%d (v で全文)", t.CommentCount)
 		}
 		body = append(body, wrap(t.Title, inner-2)...)
+		body = append(body, stDim.Render(TaskTimes(t, time.Now())))
 		if t.Note != "" {
 			for i, l := range wrap(t.Note, inner-4) {
 				p := "  "
@@ -677,7 +682,8 @@ func (m *model) renderDetail(g geom, lines []string) {
 			wd = "(未設定 — w で設定)"
 		}
 		body = append(body, stLabel.Render("name:    ")+s.Name, stLabel.Render("workdir: ")+wd)
-		body = append(body, stLabel.Render("tasks:   ")+fmt.Sprintf("%d total, %d done, %d doing   updated %s", s.Total, s.Done, s.Doing, shortTime(s.UpdatedAt)))
+		body = append(body, stLabel.Render("tasks:   ")+fmt.Sprintf("%d total, %d done, %d doing", s.Total, s.Done, s.Doing))
+		body = append(body, stLabel.Render("time:    ")+"created "+shortTime(s.CreatedAt)+"   updated "+shortTime(s.UpdatedAt))
 		if s.Description != "" {
 			body = append(body, wrap(s.Description, inner-2)...)
 		}
@@ -730,6 +736,38 @@ func shortTime(s string) string {
 	return t.Local().Format("01-02 15:04")
 }
 
+// TaskTimes はタスクの作成・着手・完了日時と所要時間を 1 行にまとめる。
+func TaskTimes(t *store.Task, now time.Time) string {
+	s := "created " + shortTime(t.CreatedAt)
+	if t.StartedAt != nil {
+		s += "   started " + shortTime(*t.StartedAt)
+	}
+	if t.DoneAt != nil {
+		s += "   " + t.Status + " " + shortTime(*t.DoneAt)
+	}
+	if d, ok := t.WorkTime(now); ok {
+		if t.Status == store.StatusDoing {
+			s += "   (elapsed " + FmtDuration(d) + ")"
+		} else {
+			s += "   (took " + FmtDuration(d) + ")"
+		}
+	}
+	return s
+}
+
+// FmtDuration は 3d4h / 2h05m / 12m / <1m の形に丸める。
+func FmtDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "<1m"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+	return fmt.Sprintf("%dd%dh", int(d.Hours())/24, int(d.Hours())%24)
+}
+
 func (m *model) View() string {
 	lines, _ := m.render()
 	for i := range lines {
@@ -777,6 +815,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	if m.form != nil {
+		if isCtrlEnterSeq(msg) {
+			return m, m.formKey(tea.KeyMsg{Type: tea.KeyCtrlJ})
+		}
 		return m, m.form.updateFocused(msg)
 	}
 	return m, nil
@@ -1036,7 +1077,7 @@ func (m *model) action(a string) tea.Cmd {
 		m.openForm(&form{kind: "new-session", title: "新しいセッション", fields: []*field{
 			newField("名前", "", "例: refactor-auth"),
 			newDirField("作業フォルダ", tildify(cwd), "空欄可。tab で補完"),
-			newField("説明", "", "ゴールや背景（任意）"),
+			newMultiField("説明", "", "ゴールや背景（任意）"),
 		}})
 	case "new-subtask":
 		if t == nil || (m.focus != focusTasks && m.view == nil) {
@@ -1045,7 +1086,7 @@ func (m *model) action(a string) tea.Cmd {
 		}
 		m.openForm(&form{kind: "new-subtask", title: fmt.Sprintf("サブタスク追加 → #%d %s", t.ID, t.Title), id: t.ID, fields: []*field{
 			newField("タイトル", "", "やること"),
-			newField("詳細", "", "任意（\\n で改行）"),
+			newMultiField("詳細", "", "任意"),
 		}})
 	case "comment":
 		if t == nil || (m.focus != focusTasks && m.view == nil) {
@@ -1053,7 +1094,7 @@ func (m *model) action(a string) tea.Cmd {
 			return nil
 		}
 		m.openForm(&form{kind: "comment", title: fmt.Sprintf("コメント → #%d %s", t.ID, t.Title), id: t.ID, fields: []*field{
-			newField("コメント", "", "結果・指摘・質問など（\\n で改行）"),
+			newMultiField("コメント", "", "結果・指摘・質問など"),
 		}})
 	case "view":
 		if t != nil && m.focus == focusTasks {
@@ -1069,20 +1110,20 @@ func (m *model) action(a string) tea.Cmd {
 		m.focus = focusTasks
 		m.openForm(&form{kind: "new-task", title: "タスク追加 → " + s.Name, fields: []*field{
 			newField("タイトル", "", "やること"),
-			newField("詳細", "", "任意（\\n で改行）"),
+			newMultiField("詳細", "", "任意"),
 		}})
 	case "edit":
 		if (m.focus == focusTasks || m.view != nil) && t != nil {
 			m.openForm(&form{kind: "edit-task", title: fmt.Sprintf("タスク #%d を編集", t.ID), id: t.ID, fields: []*field{
 				newField("タイトル", t.Title, ""),
-				newField("詳細", escNL(t.Body), "\\n で改行"),
-				newField("メモ/結果", escNL(t.Note), "\\n で改行"),
+				newMultiField("詳細", t.Body, ""),
+				newMultiField("メモ/結果", t.Note, ""),
 			}})
 		} else if s != nil {
 			m.openForm(&form{kind: "edit-session", title: fmt.Sprintf("セッション #%d を編集", s.ID), id: s.ID, fields: []*field{
 				newField("名前", s.Name, ""),
 				newDirField("作業フォルダ", tildify(s.Workdir), "空欄で解除。tab で補完"),
-				newField("説明", escNL(s.Description), "\\n で改行"),
+				newMultiField("説明", s.Description, ""),
 			}})
 		}
 	case "workdir":
@@ -1147,14 +1188,14 @@ func (m *model) action(a string) tea.Cmd {
 	return nil
 }
 
-func escNL(s string) string   { return strings.ReplaceAll(s, "\n", `\n`) }
-func unescNL(s string) string { return strings.ReplaceAll(s, `\n`, "\n") }
-
 // ---------- forms ----------
 
 type field struct {
 	label string
 	in    textinput.Model
+
+	multi bool           // 複数行入力欄（enter で改行）
+	ta    textarea.Model // multi のときに使う
 
 	dir      bool     // フォルダ入力欄（tab で補完）
 	cands    []string // 補完候補（曖昧なときに表示）
@@ -1186,25 +1227,86 @@ func newField(label, value, placeholder string) *field {
 	return &field{label: label, in: ti}
 }
 
+// multiFieldHeight は複数行入力欄の表示行数。
+const multiFieldHeight = 3
+
+// newMultiField は複数行入力用の欄。enter で改行する（ctrl+enter は保存）。
+func newMultiField(label, value, placeholder string) *field {
+	ta := textarea.New()
+	ta.Prompt = "› "
+	ta.Placeholder = placeholder
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("enter", "ctrl+m"))
+	ta.SetHeight(multiFieldHeight)
+	ta.SetValue(value) // カーソルは末尾
+	return &field{label: label, multi: true, ta: ta}
+}
+
+func (f *field) value() string {
+	if f.multi {
+		return f.ta.Value()
+	}
+	return f.in.Value()
+}
+
+func (f *field) view() string {
+	if f.multi {
+		return f.ta.View()
+	}
+	return f.in.View()
+}
+
+func (f *field) update(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	if f.multi {
+		f.ta, cmd = f.ta.Update(msg)
+	} else {
+		f.in, cmd = f.in.Update(msg)
+	}
+	return cmd
+}
+
+// atTop / atBottom は複数行欄のカーソルが先頭行 / 最終行（折り返し含む）にあるか。
+func (f *field) atTop() bool {
+	return f.ta.Line() == 0 && f.ta.LineInfo().RowOffset == 0
+}
+
+func (f *field) atBottom() bool {
+	li := f.ta.LineInfo()
+	return f.ta.Line() == f.ta.LineCount()-1 && li.RowOffset >= li.Height-1
+}
+
 type form struct {
 	kind    string
 	title   string
 	id      int64
 	fields  []*field
-	focus   int
+	focus   int    // 0..len(fields)-1: 入力欄, len(fields): OK, len(fields)+1: Cancel
 	message string // 確認ダイアログ用
 }
 
+// フォーカス位置としての OK / Cancel ボタン（入力欄の後ろに並ぶ）。
+func (f *form) okIdx() int     { return len(f.fields) }
+func (f *form) cancelIdx() int { return len(f.fields) + 1 }
+
+// onButton はフォーカスが OK / Cancel ボタンにあるか。
+func (f *form) onButton() bool { return f.focus >= len(f.fields) }
+
 func (f *form) setFocus(i int) {
-	if len(f.fields) == 0 {
-		return
-	}
-	f.focus = (i + len(f.fields)) % len(f.fields)
+	n := len(f.fields) + 2
+	f.focus = ((i % n) + n) % n
 	for j, fl := range f.fields {
-		if j == f.focus {
+		switch {
+		case fl.multi && j == f.focus:
+			fl.ta.Focus()
+		case fl.multi:
+			fl.ta.Blur()
+		case j == f.focus:
 			fl.in.Focus()
 			fl.in.CursorEnd()
-		} else {
+		default:
 			fl.in.Blur()
 		}
 	}
@@ -1212,17 +1314,19 @@ func (f *form) setFocus(i int) {
 
 func (f *form) resize(w int) {
 	for _, fl := range f.fields {
-		fl.in.Width = max(10, w-10)
+		if fl.multi {
+			fl.ta.SetWidth(max(10, w-8))
+		} else {
+			fl.in.Width = max(10, w-10)
+		}
 	}
 }
 
 func (f *form) updateFocused(msg tea.Msg) tea.Cmd {
-	if len(f.fields) == 0 {
+	if f.onButton() {
 		return nil
 	}
-	var cmd tea.Cmd
-	f.fields[f.focus].in, cmd = f.fields[f.focus].in.Update(msg)
-	return cmd
+	return f.fields[f.focus].update(msg)
 }
 
 func (m *model) openForm(f *form) {
@@ -1232,25 +1336,68 @@ func (m *model) openForm(f *form) {
 	f.setFocus(0)
 }
 
+// ctrlEnter は ctrl+enter として扱うキー。bubbletea v1 は ctrl+enter を識別できないが、
+// Windows Terminal などは ctrl+enter で LF を送るため ctrl+j として届く。
+const ctrlEnter = "ctrl+j"
+
+// isCtrlEnterSeq は modifyOtherKeys (CSI 27;5;13~) / CSI u (CSI 13;5u) 形式の ctrl+enter か。
+// bubbletea v1 はこれらを非公開の unknownCSISequenceMsg として渡すので文字列表現で判定する。
+func isCtrlEnterSeq(msg tea.Msg) bool {
+	switch fmt.Sprint(msg) {
+	case "?CSI[50 55 59 53 59 49 51 126]?", "?CSI[49 51 59 53 117]?":
+		return true
+	}
+	return false
+}
+
 func (m *model) formKey(k tea.KeyMsg) tea.Cmd {
 	f := m.form
 	m.msg = ""
+	key := k.String()
 	if len(f.fields) == 0 { // 確認ダイアログ
-		switch k.String() {
-		case "y", "Y", "enter":
+		switch key {
+		case "y", "Y":
 			return m.submitForm()
 		case "n", "N", "esc", "q", "ctrl+c":
 			m.form = nil
+		case "tab", "shift+tab", "left", "right", "h", "l":
+			f.setFocus(f.focus + 1)
+		case "enter", " ", ctrlEnter:
+			return m.pressButton()
+		}
+		return nil
+	}
+	if f.onButton() {
+		switch key {
+		case "esc", "ctrl+c":
+			m.form = nil
+		case "tab", "down":
+			f.setFocus(f.focus + 1)
+		case "shift+tab", "up":
+			f.setFocus(f.focus - 1)
+		case "left", "right":
+			f.setFocus(f.okIdx() + f.cancelIdx() - f.focus) // OK ⇔ Cancel
+		case "ctrl+s", ctrlEnter:
+			return m.submitForm()
+		case "enter", " ":
+			return m.pressButton()
 		}
 		return nil
 	}
 	fl := f.fields[f.focus]
-	key := k.String()
 	if fl.dir && key == "tab" {
 		fl.complete()
 		return nil
 	}
 	fl.cands = nil
+	if fl.multi {
+		switch {
+		case key == "enter":
+			return f.updateFocused(k) // 改行
+		case key == "up" && !fl.atTop(), key == "down" && !fl.atBottom():
+			return f.updateFocused(k) // 欄内でカーソル移動
+		}
+	}
 	switch key {
 	case "esc", "ctrl+c":
 		m.form = nil
@@ -1261,7 +1408,7 @@ func (m *model) formKey(k tea.KeyMsg) tea.Cmd {
 	case "shift+tab", "up":
 		f.setFocus(f.focus - 1)
 		return nil
-	case "ctrl+s":
+	case "ctrl+s", ctrlEnter:
 		return m.submitForm()
 	case "enter":
 		if f.focus == len(f.fields)-1 {
@@ -1302,8 +1449,10 @@ func (m *model) renderForm(g geom) ([]string, []region) {
 			row(stLabel.Render(lbl))
 		}
 		regs = append(regs, region{y: len(lines) - 1, x0: 0, x1: w, kind: rFormField, idx: i})
-		row(fl.in.View())
-		regs = append(regs, region{y: len(lines) - 1, x0: 0, x1: w, kind: rFormField, idx: i})
+		for _, l := range strings.Split(fl.view(), "\n") {
+			row(l)
+			regs = append(regs, region{y: len(lines) - 1, x0: 0, x1: w, kind: rFormField, idx: i})
+		}
 		if len(fl.cands) > 0 {
 			cl, cr := layoutCandidates(fl.cands, inner-2, 6)
 			for _, l := range cl {
@@ -1321,7 +1470,13 @@ func (m *model) renderForm(g geom) ([]string, []region) {
 	if f.message != "" {
 		okLbl, cancelLbl = " Yes (y) ", " No (n) "
 	}
-	row(stButton.Render(okLbl) + "  " + stButton.Render(cancelLbl))
+	btn := func(lbl string, idx int) string {
+		if f.focus == idx {
+			return stButtonOn.Render(lbl)
+		}
+		return stButton.Render(lbl)
+	}
+	row(btn(okLbl, f.okIdx()) + "  " + btn(cancelLbl, f.cancelIdx()))
 	by := len(lines) - 1
 	okW := runewidth.StringWidth(okLbl)
 	regs = append(regs,
@@ -1332,21 +1487,30 @@ func (m *model) renderForm(g geom) ([]string, []region) {
 	return lines, regs
 }
 
+// pressButton はフォーカス中のボタン（OK / Cancel）を押す。
+func (m *model) pressButton() tea.Cmd {
+	if m.form.focus == m.form.cancelIdx() {
+		m.form = nil
+		return nil
+	}
+	return m.submitForm()
+}
+
 func (m *model) submitForm() tea.Cmd {
 	f := m.form
-	val := func(i int) string { return strings.TrimSpace(f.fields[i].in.Value()) }
+	val := func(i int) string { return strings.TrimSpace(f.fields[i].value()) }
 	var err error
 	switch f.kind {
 	case "new-session":
 		var s *store.Session
-		s, err = m.st.CreateSession(val(0), unescNL(val(2)), val(1))
+		s, err = m.st.CreateSession(val(0), val(2), val(1))
 		if err == nil {
 			m.wantSession = s.ID
 			m.focus = focusTasks
 			m.setMsg("created session " + s.Name)
 		}
 	case "edit-session":
-		name, wd, desc := val(0), val(1), unescNL(val(2))
+		name, wd, desc := val(0), val(1), val(2)
 		_, err = m.st.UpdateSession(f.id, store.SessionPatch{Name: &name, Workdir: &wd, Description: &desc})
 	case "workdir":
 		wd := val(0)
@@ -1361,7 +1525,7 @@ func (m *model) submitForm() tea.Cmd {
 			break
 		}
 		var t *store.Task
-		t, err = m.st.AddTask(s.ID, val(0), unescNL(val(1)))
+		t, err = m.st.AddTask(s.ID, val(0), val(1))
 		if err == nil {
 			m.reload()
 			for i := range m.tasks {
@@ -1373,7 +1537,7 @@ func (m *model) submitForm() tea.Cmd {
 		}
 	case "new-subtask":
 		var t *store.Task
-		t, err = m.st.AddSubtask(f.id, val(0), unescNL(val(1)))
+		t, err = m.st.AddSubtask(f.id, val(0), val(1))
 		if err == nil {
 			m.form = nil
 			m.reload()
@@ -1382,12 +1546,12 @@ func (m *model) submitForm() tea.Cmd {
 			return nil
 		}
 	case "comment":
-		_, err = m.st.AddComment(f.id, humanAuthor(), unescNL(val(0)))
+		_, err = m.st.AddComment(f.id, humanAuthor(), val(0))
 		if err == nil {
 			m.setMsg("comment added")
 		}
 	case "edit-task":
-		title, body, note := val(0), unescNL(val(1)), unescNL(val(2))
+		title, body, note := val(0), val(1), val(2)
 		_, err = m.st.UpdateTask(f.id, store.TaskPatch{Title: &title, Body: &body, Note: &note})
 	case "delete-task":
 		err = m.st.DeleteTask(f.id)
@@ -1479,10 +1643,7 @@ func (m *model) viewLines(width int) (string, []string) {
 	var out []string
 	add := func(ls ...string) { out = append(out, ls...) }
 	add(stHeadOn.Render(fit(t.Title, width)))
-	meta := "created " + shortTime(t.CreatedAt)
-	if t.DoneAt != nil {
-		meta += "   done " + shortTime(*t.DoneAt)
-	}
+	meta := TaskTimes(t, time.Now())
 	if t.ParentID != nil {
 		meta += fmt.Sprintf("   parent #%d", *t.ParentID)
 	}
