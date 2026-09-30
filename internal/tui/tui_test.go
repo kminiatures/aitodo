@@ -364,6 +364,23 @@ func TestContextMenu(t *testing.T) {
 		t.Fatalf("status = %s, want done", tk.Status)
 	}
 
+	// ホバーで項目がハイライトされ、外れても最後の項目のまま
+	rightClick(m, g.tx+10, g.paneTop+1)
+	_, regs = m.render()
+	for _, r := range regs {
+		if r.kind == rMenuItem && r.idx == 3 {
+			m.Update(tea.MouseMsg{X: r.x0 + 1, Y: r.y, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone})
+		}
+	}
+	if m.menu == nil || m.menu.sel != 3 {
+		t.Fatalf("hover: menu=%+v", m.menu)
+	}
+	m.Update(tea.MouseMsg{X: 0, Y: 0, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone})
+	if m.menu == nil || m.menu.sel != 3 {
+		t.Fatalf("hover outside: menu=%+v", m.menu)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
 	// キー操作: ↓ enter で 2 番目（着手）
 	rightClick(m, g.tx+10, g.paneTop+1)
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -537,5 +554,130 @@ func TestTaskTimes(t *testing.T) {
 		if !strings.Contains(v, s) {
 			t.Errorf("detail pane lacks %q", s)
 		}
+	}
+}
+
+// ←→ でサブタスクを畳む・開く。畳んだ行は ▸ と隠れた着手中の数を出す。
+func TestFoldSubtasks(t *testing.T) {
+	m, st := setup(t)
+	parent := m.tasks[0]
+	c1, _ := st.AddSubtask(parent.ID, "子1", "")
+	c2, _ := st.AddSubtask(parent.ID, "子2", "")
+	st.AddSubtask(c2.ID, "孫", "")
+	st.SetStatus(c1.ID, store.StatusDoing, nil)
+	m.reload()
+	key := func(k tea.KeyType) { m.Update(tea.KeyMsg{Type: k}) }
+	if len(m.tasks) != 6 || !strings.Contains(m.View(), "▾[ ] #1") {
+		t.Fatalf("expanded: %d tasks\n%s", len(m.tasks), m.View())
+	}
+
+	// 子の上で ← → 親へ、親の上で ← → 畳む
+	m.selectTask(c1.ID)
+	key(tea.KeyLeft)
+	if m.curTask().ID != parent.ID || m.focus != focusTasks {
+		t.Fatalf("left on child should select parent: %+v", m.curTask())
+	}
+	key(tea.KeyLeft)
+	if len(m.tasks) != 3 || !strings.Contains(m.View(), "▸[ ] #1") || !strings.Contains(m.View(), ">1") {
+		t.Fatalf("collapsed: %d tasks\n%s", len(m.tasks), m.View())
+	}
+	// トップレベルで ← → セッション枠へ
+	key(tea.KeyLeft)
+	if m.focus != focusSessions {
+		t.Fatal("left on collapsed top-level should focus sessions")
+	}
+	// → でタスク枠へ戻り、もう一度 → で開く、さらに → で最初の子へ
+	key(tea.KeyRight)
+	key(tea.KeyRight)
+	if len(m.tasks) != 6 {
+		t.Fatalf("right should expand: %d", len(m.tasks))
+	}
+	key(tea.KeyRight)
+	if m.curTask().ID != c1.ID {
+		t.Fatalf("right on expanded should go to first child: %+v", m.curTask())
+	}
+
+	// [ ですべて畳むと、選択は見えている祖先へ移る
+	m.selectTask(c2.ID)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	if len(m.tasks) != 3 || m.curTask().ID != parent.ID {
+		t.Fatalf("collapse-all: %d tasks, cur %+v", len(m.tasks), m.curTask())
+	}
+	// 畳んだ親にサブタスクを足すと開いて選択される
+	sub, _ := st.AddSubtask(c2.ID, "追加", "")
+	m.reload()
+	m.selectTask(sub.ID)
+	if m.curTask().ID != sub.ID {
+		t.Fatalf("selectTask should reveal: %+v", m.curTask())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+	if len(m.tasks) != 7 {
+		t.Fatalf("expand-all: %d", len(m.tasks))
+	}
+
+	// ▾ をクリックで畳む（チェックボックスは状態を変えない）
+	g := m.geom()
+	click(m, g.tx+1, g.paneTop+1)
+	if len(m.tasks) != 3 {
+		t.Fatalf("click fold: %d", len(m.tasks))
+	}
+	if tk, _ := st.GetTask(parent.ID); tk.Status != store.StatusTodo {
+		t.Fatalf("fold click changed status: %s", tk.Status)
+	}
+	for i, l := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(l); w != 80 {
+			t.Fatalf("line %d width %d", i, w)
+		}
+	}
+}
+
+// ? でヘルプを開き、スクロールして esc / クリックで閉じる。幅は崩れない。
+func TestHelpModal(t *testing.T) {
+	m, _ := setup(t)
+	press := func(s string) { m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
+	checkWidth := func(w int) {
+		t.Helper()
+		for i, l := range strings.Split(m.View(), "\n") {
+			if lw := lipgloss.Width(l); lw != w {
+				t.Fatalf("line %d width %d: %q", i, lw, l)
+			}
+		}
+	}
+	press("?")
+	if !m.help || !strings.Contains(m.View(), "Help") || !strings.Contains(m.View(), "セッション / タスク枠を切替") {
+		t.Fatalf("help not shown:\n%s", m.View())
+	}
+	checkWidth(80)
+	// ヘルプ中のキーは下の画面に効かない
+	idx := m.tIdx
+	press("j")
+	press("j")
+	if m.tIdx != idx || m.helpOff != 2 {
+		t.Fatalf("tIdx=%d helpOff=%d", m.tIdx, m.helpOff)
+	}
+	press("G")
+	m.View()
+	if m.helpOff == 0 || m.helpOff > 100 {
+		t.Fatalf("helpOff after G = %d", m.helpOff)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.help {
+		t.Fatal("esc should close help")
+	}
+	// 広い画面では 2 列、狭い画面では 1 列でも幅が崩れない
+	for _, w := range []int{140, 50} {
+		m.Update(tea.WindowSizeMsg{Width: w, Height: 30})
+		press("?")
+		checkWidth(w)
+		click(m, 0, 0)
+		if m.help {
+			t.Fatal("click should close help")
+		}
+	}
+	// 詳細ビューからも開ける
+	press("v")
+	press("?")
+	if !m.help || m.view == nil {
+		t.Fatal("? in view should open help over view")
 	}
 }

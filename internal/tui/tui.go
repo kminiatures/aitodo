@@ -68,6 +68,7 @@ const (
 	rSession regionKind = iota
 	rTask
 	rCheckbox
+	rFold
 	rButton
 	rFormField
 	rFormButton
@@ -102,15 +103,28 @@ type model struct {
 	hideDone     bool
 	wantSession  int64
 
+	collapsed map[int64]bool     // 畳んでいるタスク（TUI 内だけの表示状態）
+	parent    map[int64]int64    // タスク ID → 親 ID（現セッションの全タスク）
+	tree      map[int64]treeInfo // 表示中タスクの子の有無など
+
 	form *form
 	view *taskView // タスク詳細（コメント全文）ビュー
 	menu *ctxMenu  // 右クリックのコンテキストメニュー
+
+	help    bool // キー操作のヘルプ（? で開閉）
+	helpOff int  // ヘルプのスクロール位置
 
 	lastClickAt time.Time
 	lastClickY  int
 
 	detailH    int  // ユーザーがドラッグで決めた詳細枠の高さ（0 = 既定）
 	dragDetail bool // 詳細枠の上辺をドラッグ中
+}
+
+// treeInfo は表示中タスクの折りたたみに関する情報。
+type treeInfo struct {
+	hasKids        bool // 表示対象の子がある（開閉できる）
+	doing, blocked int  // 畳んで隠れている子孫のうち着手中・ブロック中の数
 }
 
 type tickMsg time.Time
@@ -122,13 +136,13 @@ func tick() tea.Cmd {
 // Run は TUI を起動する。initialSession が 0 でなければそのセッションを選択した状態で開く。
 func Run(st *store.Store, initialSession int64) error {
 	m := newModel(st, initialSession)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	_, err := p.Run()
 	return err
 }
 
 func newModel(st *store.Store, initialSession int64) *model {
-	m := &model{st: st, w: 100, h: 30, wantSession: initialSession}
+	m := &model{st: st, w: 100, h: 30, wantSession: initialSession, collapsed: map[int64]bool{}}
 	if v, _ := st.GetSetting(settingDetailH); v != "" {
 		m.detailH, _ = strconv.Atoi(v)
 	}
@@ -183,11 +197,17 @@ func (m *model) reload() {
 		}
 	}
 	m.tasks = nil
+	m.parent, m.tree = map[int64]int64{}, map[int64]treeInfo{}
 	if s := m.curSession(); s != nil {
 		ts, err := m.st.ListTasks(s.ID, nil)
 		if err != nil {
 			m.setErr(err)
 			return
+		}
+		for _, t := range ts {
+			if t.ParentID != nil {
+				m.parent[t.ID] = *t.ParentID
+			}
 		}
 		if m.hideDone {
 			f := ts[:0]
@@ -198,18 +218,101 @@ func (m *model) reload() {
 			}
 			ts = f
 		}
-		m.tasks = ts
+		m.tasks = m.fold(ts)
 	}
 	m.tIdx = clamp(m.tIdx, 0, len(m.tasks)-1)
-	for i := range m.tasks {
-		if m.tasks[i].ID == selT {
-			m.tIdx = i
+	// 選択していたタスクが畳まれて隠れたら、見えている一番近い祖先を選ぶ
+	for id, found := selT, false; id != 0 && !found; id = m.parent[id] {
+		for i := range m.tasks {
+			if m.tasks[i].ID == id {
+				m.tIdx, found = i, true
+			}
 		}
 	}
 	// ここでは選択行へスクロールを戻さない（自動更新がホイールスクロールを打ち消さないように）
 	g := m.geom()
 	m.sOff = clamp(m.sOff, 0, max(0, len(m.sessions)-g.rows))
 	m.tOff = clamp(m.tOff, 0, max(0, len(m.tasks)-g.rows))
+}
+
+// fold は畳んだタスクの子孫を取り除き、m.tree を作る。ts は木の順（親の直後に子孫）。
+func (m *model) fold(ts []store.Task) []store.Task {
+	vis := make([]store.Task, 0, len(ts))
+	var owner int64 // 子孫を隠している畳んだタスク
+	ownerDepth := -1
+	for i, t := range ts {
+		if ownerDepth >= 0 && t.Depth > ownerDepth {
+			ti := m.tree[owner]
+			switch t.Status {
+			case store.StatusDoing:
+				ti.doing++
+			case store.StatusBlocked:
+				ti.blocked++
+			}
+			m.tree[owner] = ti
+			continue
+		}
+		ownerDepth = -1
+		if i+1 < len(ts) && ts[i+1].Depth > t.Depth {
+			m.tree[t.ID] = treeInfo{hasKids: true}
+			if m.collapsed[t.ID] {
+				owner, ownerDepth = t.ID, t.Depth
+			}
+		}
+		vis = append(vis, t)
+	}
+	return vis
+}
+
+// reveal は id の祖先をすべて開く。開いたものがあれば true。
+func (m *model) reveal(id int64) bool {
+	changed := false
+	for p := m.parent[id]; p != 0; p = m.parent[p] {
+		if m.collapsed[p] {
+			delete(m.collapsed, p)
+			changed = true
+		}
+	}
+	return changed
+}
+
+// foldLeft は ← の動き: 開いた親を畳む → 親へ移る → セッション枠へ移る。
+func (m *model) foldLeft() {
+	t := m.curTask()
+	if t == nil {
+		m.focus = focusSessions
+		return
+	}
+	if m.tree[t.ID].hasKids && !m.collapsed[t.ID] {
+		m.collapsed[t.ID] = true
+		m.reload()
+		return
+	}
+	if p := m.parent[t.ID]; p != 0 {
+		for i := range m.tasks {
+			if m.tasks[i].ID == p {
+				m.tIdx = i
+				m.ensureVisible()
+				return
+			}
+		}
+	}
+	m.focus = focusSessions
+}
+
+// foldRight は → の動き: 畳んだ親を開く → 最初の子へ移る。
+func (m *model) foldRight() {
+	t := m.curTask()
+	if t == nil || !m.tree[t.ID].hasKids {
+		return
+	}
+	if m.collapsed[t.ID] {
+		delete(m.collapsed, t.ID)
+		m.reload()
+		return
+	}
+	m.tIdx++
+	m.ensureVisible()
 }
 
 func clamp(v, lo, hi int) int {
@@ -502,18 +605,24 @@ func (m *model) render() ([]string, []region) {
 	case m.form != nil:
 		help = stDim.Render(fit(" tab/↑↓: move field  enter: next/OK  ctrl+enter/ctrl+s: save  esc: cancel  (mouse: click field / buttons)", m.w))
 	case m.view != nil:
-		help = stDim.Render(fit(" ↑↓/jk/wheel scroll  c comment  space done  s start  A subtask  e edit  esc/v close", m.w))
+		help = stDim.Render(fit(" ↑↓/jk/wheel scroll  c comment  space done  s start  A subtask  e edit  esc/v close  ? help", m.w))
 	case m.focus == focusSessions:
-		help = stDim.Render(fit(" ↑↓/jk move  tab/→ tasks  n new  e edit  w workdir  d delete  z archive  H show archived  q quit", m.w))
+		help = stDim.Render(fit(" ↑↓/jk move  tab/→ tasks  n new  e edit  w workdir  d delete  z archive  H show archived  ? help  q quit", m.w))
 	default:
-		help = stDim.Render(fit(" ↑↓/jk move  space done  s start  b block  - skip  a add  A sub  c comment  v view  e edit  J/K reorder  f hide done  q quit", m.w))
+		help = stDim.Render(fit(" ? help  ↑↓/jk move  ←→ fold  [ ] fold all  space done  s start  b block  - skip  a add  A sub  c comment  v view  e edit  J/K reorder  f hide done  q quit", m.w))
 	}
 	if m.menu != nil {
 		help = stDim.Render(fit(" ↑↓/jk 選択  enter 実行  esc 閉じる  (右端のキーでも実行)", m.w))
 	}
+	if m.help {
+		help = stDim.Render(fit(" ↑↓/jk/wheel スクロール  esc/?/q 閉じる", m.w))
+	}
 	lines[g.helpY] = help
 	if m.menu != nil {
 		m.renderMenu(lines, &regs)
+	}
+	if m.help {
+		m.renderHelp(lines)
 	}
 	return lines, regs
 }
@@ -591,6 +700,21 @@ func (m *model) renderPanes(g geom, lines []string, regs *[]region) {
 			if t.CommentCount > 0 {
 				suffix += fmt.Sprintf("  ✎%d", t.CommentCount)
 			}
+			// 開閉マークはチェックボックス直前の空白に置く（子のない行は今までどおり）
+			ti := m.tree[t.ID]
+			fold := " "
+			if ti.hasKids {
+				fold = "▾"
+				if m.collapsed[t.ID] {
+					fold = "▸"
+					if ti.doing > 0 {
+						suffix += fmt.Sprintf("  >%d", ti.doing)
+					}
+					if ti.blocked > 0 {
+						suffix += fmt.Sprintf("  !%d", ti.blocked)
+					}
+				}
+			}
 			prefixW := 1 + indW + 3 + 1 + runewidth.StringWidth(idS) + 1
 			rest := tInner - prefixW - runewidth.StringWidth(suffix)
 			if rest < 4 { // 狭いときは付加情報を諦める
@@ -611,19 +735,24 @@ func (m *model) renderPanes(g geom, lines []string, regs *[]region) {
 			var txt string
 			switch {
 			case i == m.tIdx && tOn:
-				txt = stSel.Render(" " + ind + mark + " " + idS + " " + title + suffix)
+				txt = stSel.Render(ind + fold + mark + " " + idS + " " + title + suffix)
 			case i == m.tIdx:
-				txt = stSelDim.Render(" " + ind + mark + " " + idS + " " + title + suffix)
+				txt = stSelDim.Render(ind + fold + mark + " " + idS + " " + title + suffix)
 			default:
-				txt = " " + ind + st.UnsetStrikethrough().Render(mark) + " " + stDim.Render(idS) + " " + st.Render(title) + stDim.Render(suffix)
+				txt = ind + fold + st.UnsetStrikethrough().Render(mark) + " " + stDim.Render(idS) + " " + st.Render(title) + stDim.Render(suffix)
 			}
 			cell = txt
 			x0 := g.tx + 1
 			cb := x0 + indW // " [x]" の開始位置（インデント分ずらす）
-			*regs = append(*regs,
-				region{y: y, x0: x0, x1: cb, kind: rTask, idx: i},
-				region{y: y, x0: cb, x1: cb + 4, kind: rCheckbox, idx: i},
-				region{y: y, x0: cb + 4, x1: x0 + tInner, kind: rTask, idx: i})
+			*regs = append(*regs, region{y: y, x0: x0, x1: cb, kind: rTask, idx: i})
+			if ti.hasKids {
+				*regs = append(*regs,
+					region{y: y, x0: cb, x1: cb + 1, kind: rFold, idx: i},
+					region{y: y, x0: cb + 1, x1: cb + 4, kind: rCheckbox, idx: i})
+			} else {
+				*regs = append(*regs, region{y: y, x0: cb, x1: cb + 4, kind: rCheckbox, idx: i})
+			}
+			*regs = append(*regs, region{y: y, x0: cb + 4, x1: x0 + tInner, kind: rTask, idx: i})
 		} else if r == 0 && len(m.tasks) == 0 {
 			hint := " (no tasks) press a to add"
 			if m.curSession() == nil {
@@ -799,6 +928,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	case tea.KeyMsg:
+		if m.help {
+			return m, m.helpKey(msg)
+		}
 		if m.menu != nil {
 			cmd := m.menuKey(msg)
 			m.ensureVisible()
@@ -831,9 +963,18 @@ func (m *model) key(k tea.KeyMsg) tea.Cmd {
 	case "tab", "shift+tab":
 		m.focus = 1 - m.focus
 	case "right", "l":
+		if m.focus == focusTasks {
+			m.foldRight()
+		}
 		m.focus = focusTasks
 	case "left", "h":
-		m.focus = focusSessions
+		if m.focus == focusTasks {
+			m.foldLeft()
+		}
+	case "[":
+		return m.action("collapse-all")
+	case "]":
+		return m.action("expand-all")
 	case "enter":
 		if m.focus == focusSessions {
 			m.focus = focusTasks
@@ -889,6 +1030,8 @@ func (m *model) key(k tea.KeyMsg) tea.Cmd {
 	case "r", "ctrl+r":
 		m.reload()
 		m.setMsg("reloaded")
+	case "?":
+		m.help, m.helpOff = true, 0
 	}
 	return nil
 }
@@ -916,6 +1059,10 @@ func (m *model) selectSession(i int) {
 }
 
 func (m *model) mouse(ev tea.MouseMsg) tea.Cmd {
+	// ボタンを押していない移動はメニューのホバー以外では使わない（描画し直さずに済ませる）
+	if ev.Action == tea.MouseActionMotion && !m.dragDetail && m.menu == nil {
+		return nil
+	}
 	_, regs := m.render()
 	g := m.geom()
 	// 詳細枠の上辺ドラッグで高さを変更
@@ -931,7 +1078,28 @@ func (m *model) mouse(ev tea.MouseMsg) tea.Cmd {
 		}
 		return nil
 	}
+	// メニュー表示中: マウスが乗った項目をハイライト
+	if m.menu != nil && ev.Action == tea.MouseActionMotion {
+		for _, r := range regs {
+			if r.kind == rMenuItem && r.y == ev.Y && ev.X >= r.x0 && ev.X < r.x1 {
+				m.menu.sel = r.idx
+			}
+		}
+		return nil
+	}
 	if ev.Action != tea.MouseActionPress {
+		return nil
+	}
+	// ヘルプ表示中: ホイールでスクロール、クリックで閉じる
+	if m.help {
+		switch ev.Button {
+		case tea.MouseButtonWheelUp:
+			m.helpOff = max(0, m.helpOff-3)
+		case tea.MouseButtonWheelDown:
+			m.helpOff += 3
+		default:
+			m.help = false
+		}
 		return nil
 	}
 	// メニュー表示中: 項目クリックで実行、それ以外のクリックで閉じる
@@ -1001,6 +1169,10 @@ func (m *model) mouse(ev tea.MouseMsg) tea.Cmd {
 			m.focus = focusTasks
 			m.tIdx = r.idx
 			return m.action("toggle-done")
+		case rFold:
+			m.focus = focusTasks
+			m.tIdx = r.idx
+			return m.action("toggle-fold")
 		case rTask:
 			m.focus = focusTasks
 			m.tIdx = r.idx
@@ -1162,6 +1334,21 @@ func (m *model) action(a string) tea.Cmd {
 		m.reload()
 	case "hide-done":
 		m.hideDone = !m.hideDone
+		m.reload()
+	case "toggle-fold":
+		if t == nil || !m.tree[t.ID].hasKids {
+			m.setErr(fmt.Errorf("サブタスクがありません"))
+			return nil
+		}
+		m.collapsed[t.ID] = !m.collapsed[t.ID]
+		m.reload()
+	case "collapse-all":
+		for _, p := range m.parent {
+			m.collapsed[p] = true
+		}
+		m.reload()
+	case "expand-all":
+		clear(m.collapsed)
 		m.reload()
 	case "move-up", "move-down":
 		if t == nil || m.hideDone {
@@ -1610,6 +1797,9 @@ func layoutCandidates(cands []string, width, maxLines int) ([]string, []region) 
 }
 
 func (m *model) selectTask(id int64) {
+	if m.reveal(id) {
+		m.reload()
+	}
 	for i := range m.tasks {
 		if m.tasks[i].ID == id {
 			m.tIdx = i
@@ -1709,6 +1899,8 @@ func (m *model) viewKey(k tea.KeyMsg) tea.Cmd {
 	m.msg = ""
 	rows := max(1, m.geom().buttonsY-3)
 	switch k.String() {
+	case "?":
+		m.help, m.helpOff = true, 0
 	case "esc", "q", "v", "o", "enter":
 		m.view = nil
 	case "ctrl+c":
@@ -1765,7 +1957,7 @@ func (m *model) rightClick(ev tea.MouseMsg, regs []region, g geom) {
 			m.focus = focusSessions
 			m.selectSession(r.idx)
 			items = m.sessionMenu()
-		case rTask, rCheckbox:
+		case rTask, rCheckbox, rFold:
 			m.focus = focusTasks
 			m.tIdx = r.idx
 			items = taskMenu
@@ -1779,7 +1971,8 @@ func (m *model) rightClick(ev tea.MouseMsg, regs []region, g geom) {
 					items = []menuItem{{"+ セッション", "n", "new-session"}, {"アーカイブ表示切替", "H", "show-archived"}}
 				} else {
 					m.focus = focusTasks
-					items = []menuItem{{"+ タスク", "a", "new-task"}, {"完了の表示切替", "f", "hide-done"}}
+					items = []menuItem{{"+ タスク", "a", "new-task"}, {"完了の表示切替", "f", "hide-done"},
+						{"すべてたたむ", "[", "collapse-all"}, {"すべて開く", "]", "expand-all"}}
 				}
 			}
 		}
@@ -1795,6 +1988,7 @@ var taskMenu = []menuItem{
 	{"! ブロック", "b", "toggle-blocked"},
 	{"- スキップ", "-", "toggle-skipped"},
 	{"+ サブタスク", "A", "new-subtask"},
+	{"たたむ / 開く", "←→", "toggle-fold"},
 	{"コメント", "c", "comment"},
 	{"詳細を見る", "v", "view"},
 	{"編集", "e", "edit"},
@@ -1898,4 +2092,168 @@ func overlay(line string, x int, s string, w int) string {
 		right = ansi.TruncateLeft(line, x+w+1, " ")
 	}
 	return left + "\x1b[0m" + s + "\x1b[0m" + right
+}
+
+// ---------- help ----------
+
+type helpSec struct {
+	title string
+	rows  [][2]string // {キー, 説明}
+}
+
+// ヘルプの内容。2 列で表示できるときは左列 helpLeft、右列 helpRight。
+var (
+	helpLeft = []helpSec{
+		{"全体", [][2]string{
+			{"tab", "セッション / タスク枠を切替"},
+			{"r", "再読み込み"},
+			{"?", "このヘルプ"},
+			{"q  ctrl+c", "終了"},
+		}},
+		{"セッション枠", [][2]string{
+			{"↑↓  jk", "移動"},
+			{"g G  pgup pgdn", "先頭 / 末尾 / ページ移動"},
+			{"→ l  enter", "タスク枠へ"},
+			{"n", "新しいセッション"},
+			{"a", "タスク追加"},
+			{"e", "編集"},
+			{"w", "作業フォルダ"},
+			{"z", "アーカイブ / 解除"},
+			{"H", "アーカイブの表示切替"},
+			{"d", "削除"},
+		}},
+		{"詳細ビュー (v)", [][2]string{
+			{"↑↓  jk  pgup pgdn", "スクロール"},
+			{"space  s", "完了 / 着手"},
+			{"c  A  e", "コメント / サブタスク / 編集"},
+			{"esc  q  v", "閉じる"},
+		}},
+		{"フォーム", [][2]string{
+			{"tab  shift+tab", "項目移動"},
+			{"ctrl+enter  ctrl+s", "保存"},
+			{"esc", "キャンセル"},
+		}},
+	}
+	helpRight = []helpSec{
+		{"タスク枠", [][2]string{
+			{"↑↓  jk", "移動"},
+			{"g G  pgup pgdn", "先頭 / 末尾 / ページ移動"},
+			{"← h", "畳む → 親へ → セッション枠へ"},
+			{"→ l", "開く → 最初の子へ"},
+			{"[  ]", "すべて畳む / すべて開く"},
+			{"space  x", "完了 / 戻す"},
+			{"s", "着手 / 戻す"},
+			{"b", "ブロック"},
+			{"-", "スキップ"},
+			{"a", "タスク追加"},
+			{"A", "サブタスク追加"},
+			{"c", "コメント"},
+			{"v  o", "詳細ビュー"},
+			{"e  enter", "編集"},
+			{"K J  shift+↑↓", "並べ替え"},
+			{"d", "削除"},
+			{"f", "完了の表示切替"},
+		}},
+		{"マウス", [][2]string{
+			{"クリック", "選択 / [ ] で完了 / ▸▾ で開閉"},
+			{"ダブルクリック", "編集（セッションはタスク枠へ）"},
+			{"右クリック", "メニュー"},
+			{"ホイール", "スクロール"},
+			{"詳細枠の上辺ドラッグ", "高さを変える"},
+		}},
+	}
+)
+
+// helpColumn はセクションを幅 w の行に並べる。kw はキー欄の幅。
+func helpColumn(secs []helpSec, kw, w int) []string {
+	var ls []string
+	for i, sec := range secs {
+		if i > 0 {
+			ls = append(ls, strings.Repeat(" ", w))
+		}
+		ls = append(ls, stHeadOn.Render(fit(sec.title, w)))
+		for _, r := range sec.rows {
+			ls = append(ls, stLabel.Render(fit(" "+r[0], kw+1))+"  "+fit(r[1], w-kw-3))
+		}
+	}
+	return ls
+}
+
+// helpBody はヘルプの本文行（幅は 2 列 / 1 列のどちらか）を返す。
+func (m *model) helpBody() ([]string, int) {
+	kw, dw := 0, 0
+	for _, sec := range append(append([]helpSec{}, helpLeft...), helpRight...) {
+		for _, r := range sec.rows {
+			kw = max(kw, runewidth.StringWidth(r[0]))
+			dw = max(dw, runewidth.StringWidth(r[1]))
+		}
+	}
+	colW := 1 + kw + 2 + dw
+	const gap = 4
+	if 2*colW+gap+4 <= m.w {
+		l, r := helpColumn(helpLeft, kw, colW), helpColumn(helpRight, kw, colW)
+		body := make([]string, max(len(l), len(r)))
+		for i := range body {
+			a, b := strings.Repeat(" ", colW), ""
+			if i < len(l) {
+				a = l[i]
+			}
+			if i < len(r) {
+				b = r[i]
+			}
+			body[i] = a + strings.Repeat(" ", gap) + b
+		}
+		return body, 2*colW + gap
+	}
+	colW = min(colW, m.w-4)
+	return helpColumn(append(append([]helpSec{}, helpLeft...), helpRight...), min(kw, colW/2), colW), colW
+}
+
+// renderHelp はヘルプを画面中央に重ねて描く。
+func (m *model) renderHelp(lines []string) {
+	body, bw := m.helpBody()
+	inner := bw + 2
+	w := inner + 2
+	rows := min(len(body), len(lines)-4)
+	m.helpOff = clamp(m.helpOff, 0, max(0, len(body)-rows))
+	x := max(0, (m.w-w)/2)
+	y := max(1, (len(lines)-rows-2)/2)
+	put := func(row int, s string) {
+		if row >= 0 && row < len(lines) {
+			lines[row] = overlay(lines[row], x, s, w)
+		}
+	}
+	put(y, boxTop("Help", w, true))
+	for i := 0; i < rows; i++ {
+		l := body[m.helpOff+i]
+		pad := max(0, bw-lipgloss.Width(l))
+		put(y+1+i, side(true)+stMenu.Render(" ")+l+stMenu.Render(strings.Repeat(" ", pad)+" ")+side(true))
+	}
+	sb := ""
+	if len(body) > rows {
+		sb = fmt.Sprintf("%d-%d/%d", m.helpOff+1, m.helpOff+rows, len(body))
+	}
+	put(y+rows+1, boxBottom(w, true, sb))
+}
+
+func (m *model) helpKey(k tea.KeyMsg) tea.Cmd {
+	switch k.String() {
+	case "esc", "q", "?", "enter":
+		m.help = false
+	case "ctrl+c":
+		return tea.Quit
+	case "up", "k":
+		m.helpOff = max(0, m.helpOff-1)
+	case "down", "j":
+		m.helpOff++
+	case "pgup", "ctrl+u":
+		m.helpOff = max(0, m.helpOff-10)
+	case "pgdown", "ctrl+d", " ":
+		m.helpOff += 10
+	case "home", "g":
+		m.helpOff = 0
+	case "end", "G":
+		m.helpOff = 1 << 20
+	}
+	return nil
 }
