@@ -170,3 +170,9 @@ Keys: `tab` switches panes, `j/k` moves, `space` toggles done, `s` doing, `b` bl
 `v` opens the full task view (body, subtasks, all comments),
 `n` creates a session, `e` edits, `w` sets the workdir (Tab completes folders like bash), `d` deletes, `J/K` reorders, `f` hides done tasks,
 `z` archives, `H` shows archived sessions, `q` quits.
+
+## Web UI (for humans)
+
+`aitodo web [--addr HOST:PORT] [-s REF] [--open]` serves a browser UI (default `http://127.0.0.1:7878`) with the
+same operations as the TUI. It auto-refreshes every 1.5 s; press `?` for its keys. It listens on loopback only by
+default and has no authentication. Agents should keep using the CLI or MCP rather than the web API.

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15181c" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="aitodo">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>aitodo</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-view="tasks">
+<header class="topbar">
+  <button class="ghost icon mobile-only" id="btn-sessions" aria-label="セッション一覧">☰</button>
+  <span class="brand">aitodo</span>
+  <span id="session-title" class="session-title"></span>
+  <span class="spacer"></span>
+  <span class="opts">
+    <label class="toggle"><input type="checkbox" id="opt-hide-done"> 完了を隠す</label>
+    <label class="toggle"><input type="checkbox" id="opt-show-archived"> アーカイブも表示</label>
+  </span>
+  <button class="ghost desktop-only" id="btn-help" title="キー操作 (?)">?</button>
+  <span id="conn" class="conn" title="自動更新"></span>
+</header>
+
+<main class="layout">
+  <aside class="pane sessions">
+    <div class="pane-head">
+      <h2>Sessions</h2>
+      <button id="btn-new-session" title="セッション作成 (n)">+ Session</button>
+    </div>
+    <ul id="session-list" class="session-list"></ul>
+  </aside>
+
+  <section class="pane tasks">
+    <div class="pane-head">
+      <h2 id="tasks-head">Tasks</h2>
+      <div class="actions" id="session-actions">
+        <button id="btn-edit-session" class="ghost" title="セッションを編集">Edit</button>
+        <button id="btn-archive-session" class="ghost">Archive</button>
+        <button id="btn-delete-session" class="ghost danger">Delete</button>
+      </div>
+    </div>
+    <div id="session-meta" class="session-meta"></div>
+    <form id="add-task" class="add-task" autocomplete="off">
+      <input id="add-task-input" placeholder="タスクを追加…" enterkeyhint="done">
+      <button type="submit">+ Task</button>
+    </form>
+    <ul id="task-list" class="task-list"></ul>
+    <div id="tasks-empty" class="empty" hidden></div>
+  </section>
+
+  <section class="pane detail">
+    <div class="pane-head mobile-only">
+      <button class="ghost" id="btn-back">‹ 一覧</button>
+      <h2 id="detail-head-title"></h2>
+    </div>
+    <div id="detail-body" class="detail-body">
+      <div class="empty">タスクを選択してください</div>
+    </div>
+    <form id="comment-form" class="comment-form" hidden autocomplete="off">
+      <textarea id="comment-input" rows="3" placeholder="コメントを追加…"></textarea>
+      <div class="row"><span class="hint" id="comment-author"></span><button type="submit">Comment</button></div>
+    </form>
+  </section>
+</main>
+
+<dialog id="modal">
+  <form id="modal-form" method="dialog">
+    <h3 id="modal-title"></h3>
+    <div id="modal-fields"></div>
+    <p id="modal-error" class="error" hidden></p>
+    <div class="row end">
+      <button type="button" class="ghost" id="modal-cancel">Cancel</button>
+      <button type="submit" id="modal-ok">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="help">
+  <h3>キー操作</h3>
+  <table class="keys">
+    <tr><td><kbd>j</kbd> <kbd>k</kbd> / <kbd>↓</kbd> <kbd>↑</kbd></td><td>タスクを選択</td></tr>
+    <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>セッションを切り替え</td></tr>
+    <tr><td><kbd>space</kbd> / <kbd>x</kbd></td><td>完了をトグル</td></tr>
+    <tr><td><kbd>s</kbd> <kbd>b</kbd> <kbd>-</kbd></td><td>進行中 / ブロック / スキップ</td></tr>
+    <tr><td><kbd>a</kbd> / <kbd>A</kbd></td><td>タスク追加 / サブタスク追加</td></tr>
+    <tr><td><kbd>e</kbd> / <kbd>enter</kbd></td><td>編集</td></tr>
+    <tr><td><kbd>c</kbd></td><td>コメント</td></tr>
+    <tr><td><kbd>K</kbd> <kbd>J</kbd></td><td>上へ / 下へ移動</td></tr>
+    <tr><td><kbd>h</kbd> <kbd>l</kbd> / <kbd>←</kbd> <kbd>→</kbd></td><td>サブタスクを折りたたむ / 開く</td></tr>
+    <tr><td><kbd>d</kbd></td><td>削除（確認あり）</td></tr>
+    <tr><td><kbd>n</kbd></td><td>セッション作成</td></tr>
+    <tr><td><kbd>f</kbd> / <kbd>H</kbd></td><td>完了を隠す / アーカイブも表示</td></tr>
+    <tr><td><kbd>esc</kbd></td><td>入力欄・ダイアログを閉じる</td></tr>
+  </table>
+  <div class="row end"><button id="help-close">Close</button></div>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

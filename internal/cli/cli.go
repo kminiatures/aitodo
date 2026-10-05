@@ -7,9 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -18,9 +22,10 @@ import (
 	"github.com/kminiatures/aitodo/internal/mcp"
 	"github.com/kminiatures/aitodo/internal/store"
 	"github.com/kminiatures/aitodo/internal/tui"
+	"github.com/kminiatures/aitodo/internal/web"
 )
 
-var Version = "0.1.0"
+var Version = "1.0.0"
 
 type app struct {
 	dbPath string
@@ -112,6 +117,8 @@ func (a *app) run(args []string) error {
 		return a.cmdTUI(rest)
 	case "mcp":
 		return mcp.Serve(a.st, os.Stdin, os.Stdout, Version)
+	case "web", "serve":
+		return a.cmdWeb(rest)
 	case "session", "sessions", "s":
 		return a.cmdSession(rest)
 	case "task", "tasks", "t":
@@ -147,6 +154,8 @@ const usage = `aitodo - AI 向け TODO（セッション → タスク）
   aitodo                         TUI を起動（マウス対応）
   aitodo manual                  AI/API 向けマニュアルを表示
   aitodo mcp                     MCP サーバー（stdio）として起動
+  aitodo web [--addr HOST:PORT] [-s REF] [--open]
+                                 Web UI を起動（既定 http://127.0.0.1:7878）
 
 セッション:
   aitodo session add NAME [--dir PATH] [--desc TEXT]
@@ -356,19 +365,98 @@ func (a *app) cmdTUI(args []string) error {
 	if err := a.open(); err != nil {
 		return err
 	}
-	var initial int64
+	initial, err := a.initialSession(p)
+	if err != nil {
+		return err
+	}
+	return tui.Run(a.st, initial)
+}
+
+// initialSession は -s で指定されたセッション、なければカレントディレクトリから解決したセッションの ID（無ければ 0）。
+func (a *app) initialSession(p *parsed) (int64, error) {
 	if p.has("session") {
 		s, err := a.st.FindSession(p.get("session"))
 		if err != nil {
-			return err
+			return 0, err
 		}
-		initial = s.ID
-	} else if cwd, err := os.Getwd(); err == nil {
+		return s.ID, nil
+	}
+	if cwd, err := os.Getwd(); err == nil {
 		if s, err := a.st.ResolveByDir(cwd); err == nil {
-			initial = s.ID
+			return s.ID, nil
 		}
 	}
-	return tui.Run(a.st, initial)
+	return 0, nil
+}
+
+func (a *app) cmdWeb(args []string) error {
+	p, err := parseArgs(args, flagSpec{value: []string{"s=session", "addr"}, bools: []string{"open"}})
+	if err != nil {
+		return err
+	}
+	initial, err := a.initialSession(p)
+	if err != nil {
+		return err
+	}
+	addr := p.get("addr")
+	if addr == "" {
+		addr = "127.0.0.1:7878"
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	h := web.Handler(a.st, web.Options{InitialSession: initial, AnyHost: !web.IsLoopback(addr)})
+	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	ip := net.ParseIP(host)
+	query := ""
+	if initial != 0 {
+		query = fmt.Sprintf("?session=%d", initial)
+	}
+	urlFor := func(h string) string { return "http://" + net.JoinHostPort(h, port) + "/" + query }
+	u := urlFor(host)
+	if ip == nil || ip.IsUnspecified() || ip.IsLoopback() {
+		u = urlFor("localhost")
+	}
+	fmt.Fprintf(a.out, "aitodo web: %s  (Ctrl+C で終了)\n", u)
+	if ip != nil && ip.IsUnspecified() {
+		// 0.0.0.0 などで待ち受けたときは、スマホなど同じネットワークの端末から開ける URL も出す
+		for _, lan := range lanAddrs() {
+			fmt.Fprintf(a.out, "            %s\n", urlFor(lan))
+		}
+	}
+	if !web.IsLoopback(addr) {
+		fmt.Fprintln(os.Stderr, "aitodo web: 警告: ループバック以外で待ち受けています。認証は無いので信頼できるネットワークでのみ使ってください")
+	}
+	if p.bools["open"] {
+		openBrowser(u)
+	}
+	return http.Serve(ln, h)
+}
+
+// lanAddrs はこのマシンのループバック以外の IPv4 アドレス。
+func lanAddrs() []string {
+	var out []string
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && n.IP.To4() != nil && !n.IP.IsLinkLocalUnicast() {
+			out = append(out, n.IP.String())
+		}
+	}
+	return out
+}
+
+func openBrowser(u string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", u)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", u)
+	default:
+		cmd = exec.Command("xdg-open", u)
+	}
+	_ = cmd.Start()
 }
 
 // ---------- session ----------
