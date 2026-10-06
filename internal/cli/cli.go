@@ -25,7 +25,7 @@ import (
 	"github.com/kminiatures/aitodo/internal/web"
 )
 
-var Version = "1.0.0"
+var Version = "1.1.0"
 
 type app struct {
 	dbPath string
@@ -136,6 +136,10 @@ func (a *app) run(args []string) error {
 		return a.taskStatus(store.StatusDone, rest)
 	case "start":
 		return a.taskStatus(store.StatusDoing, rest)
+	case "go":
+		return a.taskStatus(store.StatusGo, rest)
+	case "claim":
+		return a.taskClaim(rest)
 	case "status":
 		return a.cmdStatus(rest)
 	case "where", "current":
@@ -176,6 +180,8 @@ const usage = `aitodo - AI 向け TODO（セッション → タスク）
   aitodo task show ID
   aitodo task next [-s REF] [--claim] [--fresh]
   aitodo task start|done|skip|block|reopen ID [--note TEXT] [--comment TEXT]
+  aitodo task go ID              「今すぐ着手して」の印。そのフォルダの Claude に知らせる（channels）
+  aitodo task claim ID           go のタスクを取って doing にする（go でなければ失敗）
   aitodo task edit ID [--title T] [--body B] [--note N] [--parent ID|0]
   aitodo task move ID (--up | --down | --to INDEX)
   aitodo task rm ID
@@ -186,7 +192,7 @@ const usage = `aitodo - AI 向け TODO（セッション → タスク）
   aitodo comment rm COMMENT_ID
   投稿者の既定値は $AITODO_AUTHOR、なければ "ai"
 
-ショートカット: add, sub, import, ls, next, start, done, comment, status, where
+ショートカット: add, sub, import, ls, next, start, done, go, claim, comment, status, where
 
 グローバルオプション:
   --json         機械可読な JSON で出力（エラーは stderr に {"error": ...}）
@@ -240,6 +246,7 @@ var marks = map[string]string{
 	store.StatusDone:    "[x]",
 	store.StatusSkipped: "[-]",
 	store.StatusBlocked: "[!]",
+	store.StatusGo:      "[*]",
 }
 
 func Mark(status string) string { return marks[status] }
@@ -673,6 +680,10 @@ func (a *app) cmdTask(args []string) error {
 		return a.taskStatus(store.StatusSkipped, rest)
 	case "block":
 		return a.taskStatus(store.StatusBlocked, rest)
+	case "go":
+		return a.taskStatus(store.StatusGo, rest)
+	case "claim":
+		return a.taskClaim(rest)
 	case "reopen", "undo", "todo", "uncheck":
 		return a.taskStatus(store.StatusTodo, rest)
 	case "set-status", "status":
@@ -888,7 +899,7 @@ func (a *app) taskList(args []string) error {
 		}
 	}
 	if p.bools["pending"] {
-		statuses = []string{store.StatusTodo, store.StatusDoing, store.StatusBlocked}
+		statuses = []string{store.StatusTodo, store.StatusDoing, store.StatusBlocked, store.StatusGo}
 	}
 	ts, err := a.st.ListTasks(s.ID, statuses)
 	if err != nil {
@@ -987,6 +998,26 @@ func (a *app) taskStatus(status string, args []string) error {
 			a.printTask(t)
 		}
 	})
+}
+
+func (a *app) taskClaim(args []string) error {
+	p, err := parseArgs(args, flagSpec{})
+	if err != nil {
+		return err
+	}
+	ref, err := needOne(p, "task ID")
+	if err != nil {
+		return err
+	}
+	id, err := parseID(ref)
+	if err != nil {
+		return err
+	}
+	t, err := a.st.ClaimGo(id)
+	if err != nil {
+		return err
+	}
+	return a.emit(t, func() { a.printTask(t) })
 }
 
 func (a *app) taskEdit(args []string) error {

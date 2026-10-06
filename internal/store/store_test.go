@@ -229,3 +229,24 @@ func TestStartedAt(t *testing.T) {
 		t.Fatal("no work time without started_at")
 	}
 }
+
+func TestGoClaim(t *testing.T) {
+	st := open(t)
+	s, _ := st.CreateSession("s", "", "")
+	st.AddTasks(s.ID, []NewTask{{Title: "1"}, {Title: "2"}})
+	ts, _ := st.ListTasks(s.ID, nil)
+	if _, err := st.ClaimGo(ts[1].ID); err == nil {
+		t.Fatal("claiming a todo task must fail")
+	}
+	st.SetStatus(ts[1].ID, StatusGo, nil)
+	if n, _ := st.NextTask(s.ID, false, false); n.ID != ts[1].ID {
+		t.Fatalf("next should prefer go over todo: %+v", n)
+	}
+	got, err := st.ClaimGo(ts[1].ID)
+	if err != nil || got.Status != StatusDoing || got.StartedAt == nil {
+		t.Fatalf("claim: %+v %v", got, err)
+	}
+	if _, err := st.ClaimGo(ts[1].ID); err == nil {
+		t.Fatal("second claim must fail")
+	}
+}

@@ -8,4 +8,5 @@ This project uses `aitodo` to track work. Sessions map to working folders, so ru
 - Log progress or findings on a task: `aitodo comment <id> "<text>"` (use `-` to read from stdin)
 - New work found: `aitodo add "<title>"`, or a subtask with `aitodo sub <parent_id> "<title>"`
 - Stuck: `aitodo task block <id> --note "<reason>"`, then continue with `next`
+- `go` tasks (a human asked you to start them now) come before `todo` in `next`. If one arrives as a channel event, `aitodo claim <id>` first and ignore the event if that fails
 - Full reference: `aitodo manual`

@@ -23,10 +23,12 @@ const (
 	StatusDone    = "done"
 	StatusSkipped = "skipped"
 	StatusBlocked = "blocked"
+	// StatusGo は人が「今すぐ着手して」と指示した状態。MCP サーバーがそのフォルダの Claude に知らせる。
+	StatusGo = "go"
 )
 
 // ValidStatuses は受け付けるタスクステータスの一覧。
-var ValidStatuses = []string{StatusTodo, StatusDoing, StatusDone, StatusSkipped, StatusBlocked}
+var ValidStatuses = []string{StatusTodo, StatusDoing, StatusDone, StatusSkipped, StatusBlocked, StatusGo}
 
 // セッションのステータス。
 const (

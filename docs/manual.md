@@ -20,6 +20,7 @@ conversations, and a human can watch progress live in the TUI (`aitodo`), which 
 | `done`    | `[x]` | finished (counts as complete)            |
 | `skipped` | `[-]` | intentionally not done (counts as complete) |
 | `blocked` | `[!]` | cannot proceed. Explain why in `note`.   |
+| `go`      | `[*]` | a human asked an agent to start it now. Take it with `claim` (see below) |
 
 ## Session resolution
 
@@ -91,11 +92,13 @@ Global options: `--json`, `--db PATH`. Setting `AITODO_JSON=1` enables `--json` 
 | `aitodo import [-s REF] [--parent ID] [--file F]` | append many tasks from stdin or a file (see the formats below) |
 | `aitodo ls [-s REF] [--status todo,doing] [--pending]` | list tasks in order |
 | `aitodo task show ID` | one task with its body, note, direct subtasks and comments |
-| `aitodo next [-s REF] [--claim] [--fresh]` | the next task (with its comments and subtasks), considering only tasks without unfinished subtasks: `doing` first (so an interrupted agent resumes), else the first `todo`. `--claim` marks it `doing` atomically. `--fresh` skips `doing` tasks and always takes a new `todo` (for several agents in parallel). Prints `null` (JSON) when nothing is left |
+| `aitodo next [-s REF] [--claim] [--fresh]` | the next task (with its comments and subtasks), considering only tasks without unfinished subtasks: `doing` first (so an interrupted agent resumes), else the first `go`, else the first `todo`. `--claim` marks it `doing` atomically. `--fresh` skips `doing` tasks and always takes a new `todo` (for several agents in parallel). Prints `null` (JSON) when nothing is left |
 | `aitodo start ID...` | mark `doing` |
 | `aitodo done ID... [--note TEXT] [--comment TEXT]` | mark `done`. `--comment` also appends a comment (works for all status commands) |
 | `aitodo task skip ID... [--note TEXT]` | mark `skipped` |
 | `aitodo task block ID... [--note TEXT]` | mark `blocked` |
+| `aitodo go ID...` | mark `go`: ask the Claude running in the session's folder to start it now (see "go and channels") |
+| `aitodo claim ID` | take a `go` task and mark it `doing`. Fails if it is no longer `go` (another agent took it, or the human cancelled it) |
 | `aitodo task reopen ID...` | mark `todo` again |
 | `aitodo task status STATUS ID... [--note TEXT]` | set any status |
 | `aitodo task edit ID [--title T] [--body B] [--note N] [--parent ID\|0]` | edit fields. `--parent` moves the task under another task (`0` = top level) |
@@ -154,11 +157,26 @@ You can add `"env": {"AITODO_DB": "/path/to.db"}`.
 
 Tools: `session_list`, `session_create`, `session_get`, `session_update`, `task_add` (`parent_id`),
 `task_add_bulk` (nested `subtasks`, `parent_id`), `task_list`, `task_get` (with subtasks and comments), `task_next`,
-`task_start`, `task_done` (`note`, `comment`), `task_set_status`, `task_comment`, `task_comments`, `task_edit`
+`task_claim` (take a `go` task), `task_start`, `task_done` (`note`, `comment`), `task_set_status`, `task_comment`, `task_comments`, `task_edit`
 (`parent_id`), `task_move`, `task_delete`.
 
 Session-scoped tools accept `session` (ID or name) or `workdir`. If you pass neither, the session is resolved from
 the server's cwd, which is normally the project directory.
+
+### go and channels
+
+When aitodo is loaded as a Claude Code channel, the MCP server watches the session resolved from its cwd and pushes
+each task that becomes `go` into the running Claude session:
+
+```text
+<channel source="aitodo" task_id="12" session="myproj">
+Task #12 was set to go: ...
+</channel>
+```
+
+On such an event, call `task_claim(id)` first. If it fails, someone else already took the task, so ignore the event.
+Otherwise `task_get` it, do the work (finish its unfinished subtasks first), and `task_done` it.
+The watcher only notifies; it never changes a task's status itself.
 
 ## TUI (for humans)
 
@@ -166,7 +184,7 @@ Run `aitodo`, or `aitodo tui -s REF`. It auto-refreshes every 1.5 s, so you can 
 Subtasks are shown as an indented tree, with `done/total` and `✎N` (the comment count) at the right.
 Mouse: click to select, click `[ ]` to toggle done, double-click a task to edit it, use the wheel to scroll,
 drag the detail pane's top border to resize it (remembered across restarts), right-click a row or empty pane space for a context menu, and click the buttons in the bottom bar.
-Keys: `tab` switches panes, `j/k` moves, `space` toggles done, `s` doing, `b` blocked, `-` skipped, `a` adds a task, `A` adds a subtask, `c` comments,
+Keys: `tab` switches panes, `j/k` moves, `space` toggles done, `s` doing, `b` blocked, `-` skipped, `p` go, `a` adds a task, `A` adds a subtask, `c` comments,
 `v` opens the full task view (body, subtasks, all comments),
 `n` creates a session, `e` edits, `w` sets the workdir (Tab completes folders like bash), `d` deletes, `J/K` reorders, `f` hides done tasks,
 `z` archives, `H` shows archived sessions, `q` quits.

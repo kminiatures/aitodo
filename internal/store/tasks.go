@@ -305,6 +305,30 @@ func (s *Store) SetStatus(id int64, status string, note *string) (*Task, error) 
 	return s.GetTask(id)
 }
 
+// ClaimGo は go のタスクを doing にする。go 以外（他のエージェントが先に取った、人が戻した等）ならエラー。
+// 確認と更新を 1 つの UPDATE で行うので、同じフォルダで複数の Claude が動いていても取るのは 1 つだけ。
+func (s *Store) ClaimGo(id int64) (*Task, error) {
+	cur, err := s.GetTask(id)
+	if err != nil {
+		return nil, err
+	}
+	t := now()
+	res, err := s.DB.Exec(`UPDATE tasks SET status = 'doing', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status = 'go'`, t, t, id)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("task #%d is %s, not go (already claimed or cancelled)", id, cur.Status)
+	}
+	s.touchSession(s.DB, cur.SessionID)
+	return s.GetTask(id)
+}
+
+// GoTasks はセッション内で go になっているタスクを木の順で返す。
+func (s *Store) GoTasks(sessionID int64) ([]Task, error) {
+	return s.ListTasks(sessionID, []string{StatusGo})
+}
+
 type TaskPatch struct {
 	Title *string
 	Body  *string
@@ -462,7 +486,7 @@ func (s *Store) TaskIndex(id int64) (int, error) {
 func actionable(t *Task) bool { return t.SubtasksDone == t.SubtasksTotal }
 
 // NextTask は次に取り組むべきタスクを木の順で返す。対象は未完了のサブタスクを持たないタスクだけ。
-//   - fresh=false: 進行中(doing)があればそれを返す（中断からの再開用）。なければ最初の todo
+//   - fresh=false: 進行中(doing)があればそれを返す（中断からの再開用）。なければ最初の go、それも無ければ最初の todo
 //   - claim=true : todo を doing に変える。一覧の取得と更新を 1 つの immediate トランザクションで行うので、
 //     複数のエージェントが同時に呼んでも同じタスクを二重に取らない
 //   - fresh=true : doing を無視して常に新しい todo を返す（複数エージェントの並列実行用）
@@ -491,9 +515,14 @@ func (s *Store) NextTask(sessionID int64, claim, fresh bool) (*Task, error) {
 		}
 	}
 	var cand *Task
-	for i := range all {
-		if all[i].Status == StatusTodo && actionable(&all[i]) {
-			cand = &all[i]
+	for _, want := range []string{StatusGo, StatusTodo} { // 人が go にしたものを優先する
+		for i := range all {
+			if all[i].Status == want && actionable(&all[i]) {
+				cand = &all[i]
+				break
+			}
+		}
+		if cand != nil {
 			break
 		}
 	}

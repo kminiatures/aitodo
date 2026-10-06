@@ -11,6 +11,7 @@
   --doing: #d98a00;
   --blocked: #d64545;
   --skipped: #8a929c;
+  --go: #9b4dca;
   --danger: #d64545;
   --shadow: 0 1px 2px rgba(0, 0, 0, .06);
   color-scheme: light;
@@ -29,6 +30,7 @@
     --doing: #f0a92e;
     --blocked: #f06464;
     --skipped: #7d8692;
+    --go: #c084fc;
     --danger: #f06464;
     --shadow: none;
     color-scheme: dark;
@@ -191,6 +193,7 @@ kbd {
 .check.doing { border-color: var(--doing); color: var(--doing); }
 .check.blocked { border-color: var(--blocked); color: var(--blocked); }
 .check.skipped { border-color: var(--skipped); color: var(--skipped); }
+.check.go { border-color: var(--go); color: var(--go); }
 .task-main { flex: 1; min-width: 0; }
 .task-title { overflow-wrap: anywhere; }
 .task-list li.done .task-title, .task-list li.skipped .task-title { color: var(--muted); text-decoration: line-through; }
@@ -209,6 +212,7 @@ kbd {
 .badge.doing { color: var(--doing); }
 .badge.blocked { color: var(--blocked); }
 .badge.skipped { color: var(--skipped); }
+.badge.go { color: var(--go); }
 .badge.done { color: var(--done); }
 .badge.todo { color: var(--muted); }
 

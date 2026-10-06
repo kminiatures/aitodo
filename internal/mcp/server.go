@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kminiatures/aitodo/internal/store"
 )
@@ -41,10 +42,21 @@ type server struct {
 	version string
 	mu      sync.Mutex
 	w       *bufio.Writer
+
+	// go ステータスの監視（Claude Code の channels 向け）。initialized を受けてから始める
+	watchOnce     sync.Once
+	stop          chan struct{}
+	watchInterval time.Duration
+	watchDelay    time.Duration
 }
 
 func Serve(st *store.Store, in io.Reader, out io.Writer, version string) error {
-	s := &server{st: st, version: version, w: bufio.NewWriter(out)}
+	return serve(&server{st: st, version: version, w: bufio.NewWriter(out), watchInterval: defaultWatchInterval, watchDelay: defaultWatchDelay}, in)
+}
+
+func serve(s *server, in io.Reader) error {
+	s.stop = make(chan struct{})
+	defer close(s.stop)
 	r := bufio.NewReader(in)
 	for {
 		line, err := r.ReadBytes('\n')
@@ -121,9 +133,13 @@ func (s *server) dispatch(req *request) (any, *rpcError) {
 		}
 		return map[string]any{
 			"protocolVersion": pv,
-			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "aitodo", "title": "aitodo — AI-oriented TODO", "version": s.version},
-			"instructions":    instructions,
+			"capabilities": map[string]any{
+				"tools": map[string]any{"listChanged": false},
+				// Claude Code の channels: go にしたタスクをセッションに知らせる（notifications/claude/channel）
+				"experimental": map[string]any{"claude/channel": map[string]any{}},
+			},
+			"serverInfo":   map[string]any{"name": "aitodo", "title": "aitodo — AI-oriented TODO", "version": s.version},
+			"instructions": instructions,
 		}, nil
 	case "ping":
 		return map[string]any{}, nil
@@ -143,6 +159,10 @@ func (s *server) dispatch(req *request) (any, *rpcError) {
 	case "prompts/list":
 		return map[string]any{"prompts": []any{}}, nil
 	}
+	if req.Method == "notifications/initialized" {
+		s.watchOnce.Do(func() { go s.watchGo() })
+		return nil, nil
+	}
 	if strings.HasPrefix(req.Method, "notifications/") {
 		return nil, nil
 	}
@@ -156,7 +176,13 @@ Typical loop: task_next(claim=true) -> do the work -> task_done(id, note, commen
 Write a plan up front with task_add_bulk (items may nest "subtasks"). Tasks can have subtasks (parent_id); task_next
 only returns tasks whose subtasks are all finished, so children come first and the parent comes back last for a final check.
 Use task_comment to log progress, findings and results on a task (append-only, visible to humans in the TUI);
-"note" is the single short result summary. Record blockers with task_set_status(status="blocked", note=...).`
+"note" is the single short result summary. Record blockers with task_set_status(status="blocked", note=...).
+
+A human can set a task to status "go" to ask you to start it right now. When this session loads aitodo as a channel,
+that arrives as <channel source="aitodo" task_id="12" session="...">. On such an event: call task_claim(id) first;
+if it fails, another agent already took the task (or the human cancelled it), so ignore the event. Otherwise read the
+task with task_get, work on it (finish its unfinished subtasks first), log progress with task_comment, and check it
+off with task_done(id, note, comment). If you are in the middle of other work, finish or pause it sensibly first.`
 
 // ---------- tool definitions ----------
 
@@ -180,7 +206,7 @@ var (
 	sessionProp = str("Session ID or exact name. Optional: if omitted the session is resolved from `workdir` or the server's cwd.")
 	workdirProp = str("Directory used to resolve the session when `session` is omitted (longest workdir prefix match). Usually your project root.")
 	statusEnum  = map[string]any{"type": "string", "enum": store.ValidStatuses,
-		"description": "todo = not started, doing = in progress, done = finished, skipped = intentionally not done, blocked = cannot proceed (explain in note)"}
+		"description": "todo = not started, doing = in progress, done = finished, skipped = intentionally not done, blocked = cannot proceed (explain in note), go = a human asked an agent to start it now (claim it with task_claim)"}
 )
 
 func withSession(props map[string]any) map[string]any {
@@ -230,11 +256,13 @@ var toolDefs = []map[string]any{
 		}))},
 	{"name": "task_get", "description": "Get one task by ID with its direct subtasks and all comments.",
 		"inputSchema": obj(map[string]any{"id": integer("Task ID.")}, "id")},
-	{"name": "task_next", "description": "Return the task to work on next (with its comments and subtasks): an in-progress (doing) task if any, else the first todo, considering only tasks whose subtasks are all finished. With claim=true the todo is atomically marked doing. Returns null when nothing is left.",
+	{"name": "task_next", "description": "Return the task to work on next (with its comments and subtasks): an in-progress (doing) task if any, else the first go, else the first todo, considering only tasks whose subtasks are all finished. With claim=true the todo is atomically marked doing. Returns null when nothing is left.",
 		"inputSchema": obj(withSession(map[string]any{
 			"claim": boolean("Mark the returned todo task as doing."),
 			"fresh": boolean("Ignore tasks already in progress and always take a new todo. Use when several agents work on the same session in parallel."),
 		}))},
+	{"name": "task_claim", "description": "Take a task whose status is go (a human asked for it to be started now) and mark it doing. Fails if it is no longer go, e.g. another agent already claimed it: then leave it alone.",
+		"inputSchema": obj(map[string]any{"id": integer("Task ID.")}, "id")},
 	{"name": "task_start", "description": "Mark a task as doing (in progress).",
 		"inputSchema": obj(map[string]any{"id": integer("Task ID.")}, "id")},
 	{"name": "task_done", "description": "Check off a task (status=done). Put a one-line result summary in note; put longer details in comment.",
@@ -244,7 +272,7 @@ var toolDefs = []map[string]any{
 			"comment": str("Optional detailed result to append as a comment (what changed, where, how verified, follow-ups)."),
 			"author":  str("Comment author name (default \"ai\")."),
 		}, "id")},
-	{"name": "task_set_status", "description": "Set any status (todo|doing|done|skipped|blocked) with an optional note/comment. Use blocked + note to explain why you cannot proceed.",
+	{"name": "task_set_status", "description": "Set any status (todo|doing|done|skipped|blocked|go) with an optional note/comment. Use blocked + note to explain why you cannot proceed.",
 		"inputSchema": obj(map[string]any{"id": integer("Task ID."), "status": statusEnum, "note": str("Optional note."),
 			"comment": str("Optional comment to append."), "author": str("Comment author name (default \"ai\").")}, "id", "status")},
 	{"name": "task_comment", "description": "Append a comment to a task: progress, findings, results, questions for the human. Comments are append-only and shown in the TUI.",
@@ -449,6 +477,8 @@ func (s *server) runTool(name string, a *args) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"task": d, "remaining": sess.Total - sess.Done}, nil
+	case "task_claim":
+		return s.st.ClaimGo(a.ID)
 	case "task_start":
 		return s.setStatus(a, store.StatusDoing)
 	case "task_done":

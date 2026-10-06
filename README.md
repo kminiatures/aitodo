@@ -9,7 +9,7 @@ aitodo は AI エージェント向けの TODO ツールです。**セッショ�
 
 ## なぜ作ったか
 
-Claude Code のようなエージェントを使っていて、複数プロジェクトで複数タスクを並行してすすめると、途中でじぶんがなにをやってるのかわからなくなります。私はいったい何をやってるでしょうか。
+Claude Code のようなエージェントを使っていて、複数プロジェクトで複数タスクを並行してすすめると、途中でじぶんがなにをやってるのかわからなくなります。私はいったいなにをやっているのでしょうか。
 
 エージェントも自分用の TODO リストは持っていますが、それは会話の中にあるだけなので、セッションを閉じたりコンテキストが圧縮されたりすると消えてしまいます。翌日「続きをやって」と頼もうにも、どこまで終わっていたかをこちらで思い出して説明し直すことになり、面倒でした。
 
@@ -62,6 +62,7 @@ aitodo              # TUI 起動
 | コメント追加 | Comment | `c` |
 | 詳細ビュー（コメント全文） | View | `v`（`esc` で戻る） |
 | 進行中 / ブロック / スキップ | 下部ボタン | `s` / `b` / `-` |
+| go（そのフォルダの Claude に着手させる） | *Go | `p` |
 | 編集 | ダブルクリック / Edit | `e` / `enter` |
 | タスク追加 / セッション作成 | +Task / +Session | `a` / `n` |
 | 作業フォルダ設定 | Dir | `w` |
@@ -124,9 +125,39 @@ claude mcp add aitodo -- aitodo mcp             # このプロジェクト用
 claude mcp add -s user aitodo -- aitodo mcp     # 全プロジェクト共通
 ```
 
-ツール: `session_list` `session_create` `session_get` `session_update` `task_add` `task_add_bulk` `task_list` `task_get` `task_next` `task_start` `task_done` `task_set_status` `task_comment` `task_comments` `task_edit` `task_move` `task_delete`
+ツール: `session_list` `session_create` `session_get` `session_update` `task_add` `task_add_bulk` `task_list` `task_get` `task_next` `task_claim` `task_start` `task_done` `task_set_status` `task_comment` `task_comments` `task_edit` `task_move` `task_delete`
 
 `session` を省略した場合、セッションは `workdir` 引数から解決し、それもなければ MCP サーバーの cwd（通常はプロジェクトルート）から解決します。
+
+### go: 起動中の Claude に着手させる
+
+タスクのステータスを `go` にすると（TUI / Web で `p`、CLI で `aitodo go ID`）、そのセッションの作業フォルダで起動している Claude Code にタスクが届き、Claude が作業を始めます。Claude Code の [channels](https://code.claude.com/docs/en/channels-reference)（research preview）を使っています。
+
+channels を有効にするには、aitodo を MCP に登録したうえで、そのフォルダで Claude Code を次のように起動します（`aitodo` は `claude mcp add` で付けた名前）。
+
+```sh
+cd ~/work/myproj
+claude mcp add aitodo -- aitodo mcp        # 一度だけ（このプロジェクトに登録）
+claude --dangerously-load-development-channels server:aitodo
+```
+
+席を外して任せきりにし、スマホなどからも様子を見たいときは、権限の確認を省いて Remote Control を有効にして起動します。
+
+```sh
+claude --dangerously-load-development-channels server:aitodo --permission-mode bypassPermissions --remote-control
+```
+
+- 権限モードは `--permission-mode bypassPermissions` のようにフラグで指定します（`bypassPermissions` だけを書くとプロンプトとして扱われます）
+- `bypassPermissions` ではすべての操作が確認なしで実行されます。Web UI を外部に公開している場合は特に注意してください
+- 起動画面の下に `Channels (experimental) messages from server:aitodo …` と出ていれば読み込まれています。届かないときは `/mcp` で aitodo の状態を確認してください
+
+- 起動のたびに開発用チャンネルの確認ダイアログが出ます。「I am using this for local development」を選んでください
+- MCP サーバーは自分の cwd から解決したセッションを 1.5 秒ごとに見て、`go` になったタスクを通知します。Claude は `task_claim` でそれを `doing` にしてから作業し、終わったら `done` にします
+- サーバーは通知するだけで、ステータスは変えません。同じフォルダで複数の Claude が動いていても、`task_claim` が成功した 1 つだけが着手します。channels 無しで起動した Claude には届かず、タスクは `go` のまま残ります（`aitodo next` は `go` を `todo` より先に返します）
+- Claude の作業中に届いた通知は、いまの作業が一区切りしてから処理されます
+- Claude が最初に呼ぶ `task_claim` も MCP ツールなので、既定では承認の確認が出て、そこで止まります。任せきりにしたいなら aitodo のツールを許可しておいてください（`.claude/settings.json` の `permissions.allow` に `"mcp__aitodo"` を追加するか、`/permissions` で追加）。作業そのもの（ファイル編集やコマンド）の確認も、通常どおり権限モードに従います
+- Team / Enterprise プランでは、組織の管理者が channels を有効にしている必要があります
+- Web UI を `--addr 0.0.0.0` で公開すると、同じネットワークの誰でもタスクを書いて `go` にでき、それが起動中の Claude への指示になります。公開は信頼できるネットワークに限ってください
 
 ## 構成
 

@@ -18,8 +18,8 @@ const state = {
   last: { sessions: '', tasks: '', detail: '' },
 };
 
-const MARK = { todo: '', doing: '▶', done: '✓', skipped: '–', blocked: '!' };
-const STATUS_LABEL = { todo: 'todo', doing: 'doing', done: 'done', skipped: 'skipped', blocked: 'blocked' };
+const MARK = { todo: '', doing: '▶', done: '✓', skipped: '–', blocked: '!', go: '*' };
+const STATUS_LABEL = { todo: 'todo', doing: 'doing', done: 'done', skipped: 'skipped', blocked: 'blocked', go: 'go' };
 
 // ---------- utils ----------
 
@@ -277,7 +277,7 @@ function renderTasks() {
     el('div', { class: 'task-main' },
       el('div', { class: 'task-title', text: t.title }),
       sub.length ? el('div', { class: 'task-sub' }, sub) : null),
-    t.status === 'doing' || t.status === 'blocked' ? el('span', { class: 'badge ' + t.status, text: t.status }) : null,
+    t.status === 'doing' || t.status === 'blocked' || t.status === 'go' ? el('span', { class: 'badge ' + t.status, text: t.status }) : null,
     el('span', { class: 'task-id', text: '#' + t.id }));
     ul.append(li);
   }
@@ -334,6 +334,7 @@ function renderDetail() {
       statusBtn('doing', '▶ Start', 's'),
       statusBtn('blocked', '! Block', 'b'),
       statusBtn('skipped', '– Skip', '-'),
+      statusBtn('go', '* Go', 'p'),
       statusBtn('todo', '↺ Todo'),
       el('button', { class: 'ghost', title: '(A)', onclick: () => addSubtask(d) }, '+ Sub'),
       el('button', { class: 'ghost', title: '(e)', onclick: () => editTask(d) }, 'Edit'),
@@ -699,6 +700,7 @@ document.addEventListener('keydown', (ev) => {
     case 's': return run(() => setStatus(t.id, 'doing'));
     case 'b': return run(() => setStatus(t.id, 'blocked'));
     case '-': return run(() => setStatus(t.id, 'skipped'));
+    case 'p': return run(() => setStatus(t.id, t.status === 'go' ? 'todo' : 'go'));
     case 'A': return run(() => addSubtask(t));
     case 'e': case 'Enter': return run(() => editTask(t));
     case 'c': return run(() => $('comment-input').focus());

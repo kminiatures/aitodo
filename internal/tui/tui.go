@@ -39,6 +39,7 @@ var (
 	stDoing    = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
 	stBlocked  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	stSkipped  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	stGo       = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
 	stButton   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("238"))
 	stButtonOn = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("6")).Bold(true)
 	stErr      = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
@@ -53,6 +54,7 @@ var marks = map[string]string{
 	store.StatusDone:    "[x]",
 	store.StatusSkipped: "[-]",
 	store.StatusBlocked: "[!]",
+	store.StatusGo:      "[*]",
 }
 
 // ---------- model ----------
@@ -125,6 +127,7 @@ type model struct {
 type treeInfo struct {
 	hasKids        bool // 表示対象の子がある（開閉できる）
 	doing, blocked int  // 畳んで隠れている子孫のうち着手中・ブロック中の数
+	goes           int  // 同じく go の数
 }
 
 type tickMsg time.Time
@@ -248,6 +251,8 @@ func (m *model) fold(ts []store.Task) []store.Task {
 				ti.doing++
 			case store.StatusBlocked:
 				ti.blocked++
+			case store.StatusGo:
+				ti.goes++
 			}
 			m.tree[owner] = ti
 			continue
@@ -507,7 +512,7 @@ func (m *model) buttons() []button {
 	var bs []button
 	if m.focus == focusTasks && m.curTask() != nil {
 		bs = []button{{"+Task", "new-task"}, {"+Sub", "new-subtask"}, {"✓Done", "toggle-done"}, {"▶Start", "toggle-doing"},
-			{"!Block", "toggle-blocked"}, {"Comment", "comment"}, {"View", "view"}, {"Edit", "edit"},
+			{"!Block", "toggle-blocked"}, {"*Go", "toggle-go"}, {"Comment", "comment"}, {"View", "view"}, {"Edit", "edit"},
 			{"↑", "move-up"}, {"↓", "move-down"}, {"Delete", "delete"}}
 	} else {
 		bs = []button{{"+Session", "new-session"}, {"+Task", "new-task"}, {"Edit", "edit"}}
@@ -609,7 +614,7 @@ func (m *model) render() ([]string, []region) {
 	case m.focus == focusSessions:
 		help = stDim.Render(fit(" ↑↓/jk move  tab/→ tasks  n new  e edit  w workdir  d delete  z archive  H show archived  ? help  q quit", m.w))
 	default:
-		help = stDim.Render(fit(" ? help  ↑↓/jk move  ←→ fold  [ ] fold all  space done  s start  b block  - skip  a add  A sub  c comment  v view  e edit  J/K reorder  f hide done  q quit", m.w))
+		help = stDim.Render(fit(" ? help  ↑↓/jk move  ←→ fold  [ ] fold all  space done  s start  b block  - skip  p go  a add  A sub  c comment  v view  e edit  J/K reorder  f hide done  q quit", m.w))
 	}
 	if m.menu != nil {
 		help = stDim.Render(fit(" ↑↓/jk 選択  enter 実行  esc 閉じる  (右端のキーでも実行)", m.w))
@@ -713,6 +718,9 @@ func (m *model) renderPanes(g geom, lines []string, regs *[]region) {
 					if ti.blocked > 0 {
 						suffix += fmt.Sprintf("  !%d", ti.blocked)
 					}
+					if ti.goes > 0 {
+						suffix += fmt.Sprintf("  *%d", ti.goes)
+					}
 				}
 			}
 			prefixW := 1 + indW + 3 + 1 + runewidth.StringWidth(idS) + 1
@@ -731,6 +739,8 @@ func (m *model) renderPanes(g geom, lines []string, regs *[]region) {
 				st = stBlocked
 			case store.StatusSkipped:
 				st = stSkipped
+			case store.StatusGo:
+				st = stGo
 			}
 			var txt string
 			switch {
@@ -1001,6 +1011,8 @@ func (m *model) key(k tea.KeyMsg) tea.Cmd {
 		return m.action("toggle-blocked")
 	case "-":
 		return m.action("toggle-skipped")
+	case "p":
+		return m.action("toggle-go")
 	case "a":
 		return m.action("new-task")
 	case "A":
@@ -1244,6 +1256,8 @@ func (m *model) action(a string) tea.Cmd {
 		m.toggle(store.StatusBlocked)
 	case "toggle-skipped":
 		m.toggle(store.StatusSkipped)
+	case "toggle-go":
+		m.toggle(store.StatusGo)
 	case "new-session":
 		cwd, _ := os.Getwd()
 		m.openForm(&form{kind: "new-session", title: "新しいセッション", fields: []*field{
@@ -1987,6 +2001,7 @@ var taskMenu = []menuItem{
 	{"▶ 着手 / 戻す", "s", "toggle-doing"},
 	{"! ブロック", "b", "toggle-blocked"},
 	{"- スキップ", "-", "toggle-skipped"},
+	{"* go（Claude に着手させる）", "p", "toggle-go"},
 	{"+ サブタスク", "A", "new-subtask"},
 	{"たたむ / 開く", "←→", "toggle-fold"},
 	{"コメント", "c", "comment"},
@@ -2145,6 +2160,7 @@ var (
 			{"s", "着手 / 戻す"},
 			{"b", "ブロック"},
 			{"-", "スキップ"},
+			{"p", "go / 戻す（そのフォルダの Claude に着手させる）"},
 			{"a", "タスク追加"},
 			{"A", "サブタスク追加"},
 			{"c", "コメント"},
