@@ -149,7 +149,7 @@ footer { margin-top: 64px; color: var(--muted); font-size: .85rem; }
   <img src="img/devlog.jpg" alt="devlog の画面。作業の概要と、スマホ幅で撮ったアプリのスクショが並んでいる" loading="lazy">
   <div>
     <h3>4・5. スクショで確かめる</h3>
-    <p>devlog は、Claude が動作確認で撮ったスクショや動画を、作業の概要と一緒にプロジェクトの <code>devlog/</code> に残して、1 枚の HTML にまとめる Claude Code のスキルです。「完了を報告する前に devlog に記録する」と CLAUDE.md に書いておくと、毎回記録してくれます。</p>
+    <p>devlog は、Claude が動作確認で撮ったスクショや動画を、作業の概要と一緒にプロジェクトの <code>devlog/</code> に残して、1 枚の HTML にまとめる Claude Code のスキルです（<a href="https://github.com/kminiatures/aitodo/tree/main/skills/devlog">skills/devlog</a>）。「完了を報告する前に devlog に記録する」と CLAUDE.md に書いておくと、毎回記録してくれます。</p>
     <p>iPhone ではコードの差分を読まず、このページで見た目を確かめて、よければタスクを閉じ、だめならコメントを書いて <code>go</code> に戻します。</p>
   </div>
 </div>
@@ -187,6 +187,11 @@ python3 -m http.server --bind "$(tailscale ip -4)" 8000 -d ~/work/recipe-app/dev
 <p>iPhone の Safari では、MagicDNS のホスト名で開けます（<code>my-mac</code> は Mac のマシン名に置き換えてください）。</p>
 <pre><code>http://my-mac:7878/      aitodo
 http://my-mac:8000/      devlog</code></pre>
+
+<h3>devlog スキルを入れる</h3>
+<pre><code>git clone https://github.com/kminiatures/aitodo
+cp -R aitodo/skills/devlog ~/.claude/skills/</code></pre>
+<p>Python 3 の標準ライブラリだけで動きます。記録は各プロジェクトの <code>devlog/</code> に置かれ、<code>.gitignore</code> に足されるので git には入りません。</p>
 
 <h3>CLAUDE.md に書いておくこと</h3>
 <pre><code>- 動作確認のためにスクショを撮ったら、自分で見て確かめたあと、

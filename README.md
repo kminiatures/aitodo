@@ -161,6 +161,14 @@ claude --dangerously-load-development-channels server:aitodo --permission-mode b
 - Team / Enterprise プランでは、組織の管理者が channels を有効にしている必要があります
 - Web UI を `--addr 0.0.0.0` で公開すると、同じネットワークの誰でもタスクを書いて `go` にでき、それが起動中の Claude への指示になります。公開は信頼できるネットワークに限ってください
 
+## devlog スキル
+
+`skills/devlog/` は、動作確認で撮ったスクショや動画を作業の概要と一緒にプロジェクトの `devlog/` に記録し、ローカルで見られる HTML にまとめる Claude Code のスキルです。aitodo とは別に使えます。
+
+```sh
+cp -R skills/devlog ~/.claude/skills/
+```
+
 ## 構成
 
 ```
@@ -171,4 +179,6 @@ internal/mcp            MCP サーバー（stdio, JSON-RPC 2.0）
 internal/tui            bubbletea による TUI
 internal/web            Web UI（JSON API と埋め込みの静的ファイル。ビルド不要の素の JS）
 docs/manual.md          AI 向けマニュアル（バイナリに埋め込み）
+docs/index.html         GitHub Pages（iPhone から開発する）
+skills/devlog           devlog スキル
 ```
