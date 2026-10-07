@@ -42,24 +42,35 @@ li { margin: 4px 0; }
 .flow span { flex: 1; }
 .who { color: var(--muted); font-size: .85rem; white-space: nowrap; }
 
-.diagram { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; margin: 20px 0; }
-.box { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; font-size: .9rem; line-height: 1.6; }
-.box strong { display: block; margin-bottom: 4px; }
-.arrow { text-align: center; color: var(--muted); font-size: .8rem; line-height: 1.4; }
-.arrow::before { content: "⇄"; display: block; font-size: 1.4rem; color: var(--fg); }
 
 .step { display: grid; grid-template-columns: 220px 1fr; gap: 24px; align-items: start; margin: 28px 0; }
 .step img { width: 100%; border-radius: 18px; border: 1px solid var(--line); box-shadow: 0 4px 18px #0000001a; display: block; }
 .step h3 { margin-top: 0; }
 .cap { color: var(--muted); font-size: .85rem; margin-top: 6px; }
 
+.info { margin: 20px 0 28px; }
+.info svg { width: 100%; height: auto; display: block; }
+.info .v { display: none; }
+.info .dev { fill: var(--card); stroke: var(--fg); stroke-width: 2; }
+.info .scr { fill: var(--code); stroke: none; }
+.info .chip { fill: var(--card); stroke: var(--line); stroke-width: 1; }
+.info .t { fill: var(--fg); font-size: 13px; }
+.info .tb { fill: var(--fg); font-size: 15px; font-weight: 700; }
+.info .tm { fill: var(--muted); font-size: 12px; }
+.info .num { fill: var(--accent); }
+.info .numt { fill: #fff; font-size: 12px; font-weight: 700; }
+.info .go { stroke: var(--go); stroke-width: 2.5; fill: none; }
+.info .back { stroke: var(--accent); stroke-width: 2.5; fill: none; }
+.info .ts { fill: var(--bg); stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.info .gof { fill: var(--go); } .info .backf { fill: var(--accent); }
+
 footer { margin-top: 64px; color: var(--muted); font-size: .85rem; }
 
 @media (max-width: 600px) {
   main { padding-top: 28px; }
   h1 { font-size: 1.5rem; }
-  .diagram { grid-template-columns: 1fr; }
-  .arrow::before { content: "⇅"; }
+  .info .h { display: none; }
+  .info .v { display: block; max-width: 360px; margin: 0 auto; }
   .step { grid-template-columns: 1fr; gap: 12px; }
   .step img { max-width: 260px; }
   .flow li { flex-wrap: wrap; row-gap: 0; }
@@ -72,6 +83,17 @@ footer { margin-top: 64px; color: var(--muted); font-size: .85rem; }
 <main>
 
 <h1>iPhone から開発する</h1>
+<figure class="info">
+<svg class="h" viewBox="0 20 720 310" role="img" aria-label="iPhone で go にしたタスクを Mac の Claude Code が受け取って作業し、経過とスクショを iPhone で確かめる流れ。両者は Tailscale でつながる"><defs>
+<marker id="ag" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="gof" d="M0 0 L10 5 L0 10 z"/></marker>
+<marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="backf" d="M0 0 L10 5 L0 10 z"/></marker>
+</defs><rect class="dev" x="40" y="40" width="130" height="230" rx="22"/><rect class="scr" x="50" y="68" width="110" height="174" rx="6"/><text class="tb" x="105" y="60" text-anchor="middle">iPhone</text><rect class="chip" x="58" y="84" width="94" height="26" rx="6"/><text class="t" x="105.0" y="101" text-anchor="middle">aitodo</text><rect class="chip" x="58" y="120" width="94" height="26" rx="6"/><text class="t" x="105.0" y="137" text-anchor="middle">devlog</text><rect class="chip" x="58" y="156" width="94" height="26" rx="6"/><text class="t" x="105.0" y="173" text-anchor="middle">Claude アプリ</text><text class="tm" x="105" y="205" text-anchor="middle">Safari で開く</text><text class="tm" x="105" y="222" text-anchor="middle">コードは見ない</text><rect class="dev" x="510" y="70" width="190" height="150" rx="8"/><rect class="scr" x="520" y="98" width="170" height="112" rx="4"/><path class="dev" d="M492 220 h226 l-12 16 h-202 z"/><text class="tb" x="605" y="90" text-anchor="middle">Mac</text><rect class="chip" x="530" y="110" width="150" height="26" rx="6"/><text class="t" x="605.0" y="127" text-anchor="middle">Claude Code</text><rect class="chip" x="530" y="142" width="150" height="26" rx="6"/><text class="t" x="605.0" y="159" text-anchor="middle">aitodo mcp / web</text><rect class="chip" x="530" y="174" width="150" height="26" rx="6"/><text class="t" x="605.0" y="191" text-anchor="middle">devlog/</text><path class="go" d="M180 105 C 300 70, 400 70, 495 105" marker-end="url(#ag)"/><circle class="num" cx="255" cy="58" r="10"/><text class="numt" x="255" y="62" text-anchor="middle">1</text><text class="t" x="272" y="62">タスクを go にする</text><path class="back" d="M495 225 C 400 260, 300 260, 180 225" marker-end="url(#ab)"/><circle class="num" cx="240" cy="272" r="10"/><text class="numt" x="240" y="276" text-anchor="middle">3</text><text class="t" x="257" y="276">経過のコメント・スクショ</text><rect class="ts" x="275" y="146" width="170" height="44" rx="22"/><text class="t" x="360" y="166" text-anchor="middle">Tailscale</text><text class="tm" x="360" y="182" text-anchor="middle">tailnet の中だけ</text><circle class="num" cx="530" cy="262" r="10"/><text class="numt" x="530" y="266" text-anchor="middle">2</text><text class="t" x="547" y="266">Claude が作業・記録</text><circle class="num" cx="52" cy="300" r="10"/><text class="numt" x="52" y="304" text-anchor="middle">4</text><text class="t" x="69" y="304">見て確かめる</text></svg>
+<svg class="v" viewBox="0 0 360 620" role="img" aria-label="iPhone で go にしたタスクを Mac の Claude Code が受け取って作業し、経過とスクショを iPhone で確かめる流れ。両者は Tailscale でつながる"><defs>
+<marker id="vag" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="gof" d="M0 0 L10 5 L0 10 z"/></marker>
+<marker id="vab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="backf" d="M0 0 L10 5 L0 10 z"/></marker>
+</defs><rect class="dev" x="115" y="20" width="130" height="230" rx="22"/><rect class="scr" x="125" y="48" width="110" height="174" rx="6"/><text class="tb" x="180" y="40" text-anchor="middle">iPhone</text><rect class="chip" x="133" y="64" width="94" height="26" rx="6"/><text class="t" x="180.0" y="81" text-anchor="middle">aitodo</text><rect class="chip" x="133" y="100" width="94" height="26" rx="6"/><text class="t" x="180.0" y="117" text-anchor="middle">devlog</text><rect class="chip" x="133" y="136" width="94" height="26" rx="6"/><text class="t" x="180.0" y="153" text-anchor="middle">Claude アプリ</text><text class="tm" x="180" y="185" text-anchor="middle">Safari で開く</text><text class="tm" x="180" y="202" text-anchor="middle">コードは見ない</text><circle class="num" cx="126" cy="272" r="10"/><text class="numt" x="126" y="276" text-anchor="middle">4</text><text class="t" x="143" y="276">見て確かめる</text><rect class="dev" x="85" y="420" width="190" height="150" rx="8"/><rect class="scr" x="95" y="448" width="170" height="112" rx="4"/><path class="dev" d="M67 570 h226 l-12 16 h-202 z"/><text class="tb" x="180" y="440" text-anchor="middle">Mac</text><rect class="chip" x="105" y="460" width="150" height="26" rx="6"/><text class="t" x="180.0" y="477" text-anchor="middle">Claude Code</text><rect class="chip" x="105" y="492" width="150" height="26" rx="6"/><text class="t" x="180.0" y="509" text-anchor="middle">aitodo mcp / web</text><rect class="chip" x="105" y="524" width="150" height="26" rx="6"/><text class="t" x="180.0" y="541" text-anchor="middle">devlog/</text><path class="go" d="M108 200 C 45 280, 45 330, 100 405" marker-end="url(#vag)"/><circle class="num" cx="24" cy="300" r="10"/><text class="numt" x="24" y="304" text-anchor="middle">1</text><text class="t" x="24" y="330" text-anchor="middle">go</text><path class="back" d="M260 405 C 315 330, 315 280, 252 200" marker-end="url(#vab)"/><circle class="num" cx="336" cy="300" r="10"/><text class="numt" x="336" y="304" text-anchor="middle">3</text><text class="t" x="336" y="330" text-anchor="middle">経過</text><text class="t" x="336" y="347" text-anchor="middle">スクショ</text><rect class="ts" x="110" y="300" width="140" height="44" rx="22"/><text class="t" x="180" y="320" text-anchor="middle">Tailscale</text><text class="tm" x="180" y="336" text-anchor="middle">tailnet の中だけ</text><circle class="num" cx="108" cy="606" r="10"/><text class="numt" x="108" y="610" text-anchor="middle">2</text><text class="t" x="125" y="610">Claude が作業・記録</text></svg>
+</figure>
+
 <p class="lead">Claude Code・Tailscale・<a href="https://github.com/kminiatures/aitodo">aitodo</a>・開発履歴（devlog）の組み合わせで、Mac に置いたプロジェクトを外出先の iPhone から進める使い方です。</p>
 
 <p>Mac の前に座っていないあいだも、手が空いたときにちょっとした修正を頼んで、できあがりを見て、次を頼む、くらいのことはしたいと思っていました。ただ、iPhone でターミナルを開いてコードを読むのはつらいです。そこで、iPhone ではコードを見ずに済むように役割を分けました。</p>
@@ -83,22 +105,6 @@ footer { margin-top: 64px; color: var(--muted); font-size: .85rem; }
   <li><strong>口をはさむ</strong>：込み入ったときだけ、Claude アプリの Remote Control で会話に入る</li>
   <li><strong>つなぐ</strong>：iPhone と Mac は Tailscale でつなぐので、インターネットには何も公開しない</li>
 </ul>
-
-<div class="diagram" aria-label="構成図">
-  <div class="box">
-    <strong>iPhone</strong>
-    Safari：aitodo Web UI / devlog<br>
-    Claude アプリ：Remote Control<br>
-    Tailscale アプリ
-  </div>
-  <div class="arrow">Tailscale<br>（tailnet 内だけ）</div>
-  <div class="box">
-    <strong>Mac</strong>
-    Claude Code（channels + Remote Control）<br>
-    aitodo web / aitodo mcp<br>
-    devlog/index.html
-  </div>
-</div>
 
 <h2>流れ</h2>
 
