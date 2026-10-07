@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iPhone から開発する — aitodo</title>
+<meta name="description" content="Claude Code と Tailscale と aitodo と開発履歴（devlog）で、Mac に置いたプロジェクトを iPhone から進める使い方。">
+<link rel="icon" href="img/icon.svg">
+<style>
+:root {
+  --bg: #fafaf8; --fg: #1d1f23; --muted: #646a73; --line: #e3e4e0;
+  --card: #fff; --code: #f1f2ef; --accent: #2f6fed; --go: #8a3fd1;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a; --fg: #e6e7e9; --muted: #9aa0a8; --line: #2c3036;
+    --card: #1c1f23; --code: #23272c; --accent: #6d9bff; --go: #b98aef;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.85 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+main { max-width: 760px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.4; margin: 0 0 12px; }
+h2 { font-size: 1.35rem; margin: 56px 0 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+h3 { font-size: 1.05rem; margin: 28px 0 6px; }
+p { margin: 10px 0; }
+a { color: var(--accent); }
+.lead { color: var(--muted); }
+code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+pre { background: var(--code); padding: 12px 14px; border-radius: 8px; overflow-x: auto; font-size: .85rem; line-height: 1.6; }
+pre code { background: none; padding: 0; }
+ul, ol { padding-left: 1.3em; }
+li { margin: 4px 0; }
+.note { border-left: 3px solid var(--line); padding: 2px 0 2px 12px; color: var(--muted); font-size: .92rem; }
+
+.flow { list-style: none; padding: 0; margin: 20px 0; display: grid; gap: 8px; }
+.flow li { display: flex; gap: 12px; align-items: baseline; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 0; }
+.flow b { flex: none; width: 1.6em; height: 1.6em; line-height: 1.6em; text-align: center; border-radius: 50%; background: var(--accent); color: #fff; font-size: .85rem; }
+.flow span { flex: 1; }
+.who { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+
+.diagram { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; margin: 20px 0; }
+.box { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; font-size: .9rem; line-height: 1.6; }
+.box strong { display: block; margin-bottom: 4px; }
+.arrow { text-align: center; color: var(--muted); font-size: .8rem; line-height: 1.4; }
+.arrow::before { content: "⇄"; display: block; font-size: 1.4rem; color: var(--fg); }
+
+.step { display: grid; grid-template-columns: 220px 1fr; gap: 24px; align-items: start; margin: 28px 0; }
+.step img { width: 100%; border-radius: 18px; border: 1px solid var(--line); box-shadow: 0 4px 18px #0000001a; display: block; }
+.step h3 { margin-top: 0; }
+.cap { color: var(--muted); font-size: .85rem; margin-top: 6px; }
+
+footer { margin-top: 64px; color: var(--muted); font-size: .85rem; }
+
+@media (max-width: 600px) {
+  main { padding-top: 28px; }
+  h1 { font-size: 1.5rem; }
+  .diagram { grid-template-columns: 1fr; }
+  .arrow::before { content: "⇅"; }
+  .step { grid-template-columns: 1fr; gap: 12px; }
+  .step img { max-width: 260px; }
+  .flow li { flex-wrap: wrap; row-gap: 0; }
+  .flow span { flex-basis: calc(100% - 2.6em); }
+  .who { padding-left: 2.5em; }
+}
+</style>
+</head>
+<body>
+<main>
+
+<h1>iPhone から開発する</h1>
+<p class="lead">Claude Code・Tailscale・<a href="https://github.com/kminiatures/aitodo">aitodo</a>・開発履歴（devlog）の組み合わせで、Mac に置いたプロジェクトを外出先の iPhone から進める使い方です。</p>
+
+<p>Mac の前に座っていないあいだも、手が空いたときにちょっとした修正を頼んで、できあがりを見て、次を頼む、くらいのことはしたいと思っていました。ただ、iPhone でターミナルを開いてコードを読むのはつらいです。そこで、iPhone ではコードを見ずに済むように役割を分けました。</p>
+
+<ul>
+  <li><strong>頼む・眺める</strong>：aitodo の Web UI にタスクを書いて <code>go</code> にする。進み具合とコメントもここで見る</li>
+  <li><strong>作業する</strong>：Mac で起動しっぱなしの Claude Code が、<code>go</code> を受け取って作業する</li>
+  <li><strong>確かめる</strong>：Claude が撮った動作確認のスクショを、devlog のページで見る</li>
+  <li><strong>口をはさむ</strong>：込み入ったときだけ、Claude アプリの Remote Control で会話に入る</li>
+  <li><strong>つなぐ</strong>：iPhone と Mac は Tailscale でつなぐので、インターネットには何も公開しない</li>
+</ul>
+
+<div class="diagram" aria-label="構成図">
+  <div class="box">
+    <strong>iPhone</strong>
+    Safari：aitodo Web UI / devlog<br>
+    Claude アプリ：Remote Control<br>
+    Tailscale アプリ
+  </div>
+  <div class="arrow">Tailscale<br>（tailnet 内だけ）</div>
+  <div class="box">
+    <strong>Mac</strong>
+    Claude Code（channels + Remote Control）<br>
+    aitodo web / aitodo mcp<br>
+    devlog/index.html
+  </div>
+</div>
+
+<h2>流れ</h2>
+
+<ol class="flow">
+  <li><b>1</b><span>iPhone の aitodo にタスクを書き、<code>go</code> にする</span><span class="who">iPhone</span></li>
+  <li><b>2</b><span>Mac の Claude Code にタスクが届き、作業が始まる</span><span class="who">Mac</span></li>
+  <li><b>3</b><span>Claude が途中経過をコメントに残す。iPhone で眺めて、気になればコメントを返す</span><span class="who">両方</span></li>
+  <li><b>4</b><span>Claude が動作確認のスクショを撮り、devlog に記録してからタスクを完了にする</span><span class="who">Mac</span></li>
+  <li><b>5</b><span>iPhone で devlog を開いて、スクショで仕上がりを確かめる</span><span class="who">iPhone</span></li>
+</ol>
+
+<p class="note">ここからのスクショは、デモ用のデータを Mac のブラウザで iPhone の幅（390px）にして撮ったものです。</p>
+
+<div class="step">
+  <img src="img/web-tasks.jpg" alt="aitodo Web UI のタスク一覧。完了・進行中（doing）・go のタスクが並んでいる" loading="lazy">
+  <div>
+    <h3>1. タスクを書いて go にする</h3>
+    <p>Safari で aitodo の Web UI を開きます。上の入力欄にタスクを書いて追加し、詳細画面で <strong>Go</strong> を押すと <code>go</code> になります。紫の <code>go</code> の印がついたタスクが、Claude への「今すぐやって」の合図です。</p>
+    <p>ホーム画面に追加しておくと、アプリのように開けます。</p>
+  </div>
+</div>
+
+<div class="step">
+  <img src="img/web-go.jpg" alt="タスクの詳細画面。Go ボタンが押された状態" loading="lazy">
+  <div>
+    <h3>2. Claude が受け取る</h3>
+    <p>Mac で起動している Claude Code が、Claude Code の channels の仕組みで <code>go</code> のタスクを受け取ります。<code>task_claim</code> で <code>doing</code> に変えてから作業に入るので、同じフォルダで Claude を何個か動かしていても、着手するのは 1 つだけです。</p>
+    <p>Claude がほかの作業をしている最中なら、一区切りついてから取りかかります。</p>
+  </div>
+</div>
+
+<div class="step">
+  <img src="img/web-detail.jpg" alt="タスクの詳細画面。サブタスクの進み具合と、ai と me のコメントが並んでいる" loading="lazy">
+  <div>
+    <h3>3. 途中経過を見て、コメントで返す</h3>
+    <p>Claude は、サブタスクを片付けるたびに結果をコメントに残します。画面は 1.5 秒ごとに更新されるので、開いておけば進んでいくのが見えます。</p>
+    <p>「0 件のときの文言だけ変えて」くらいの注文は、ここにコメントで書けば済みます。もっと込み入った話になったら、Claude アプリから Remote Control で、その Claude Code の会話に直接入ります。</p>
+  </div>
+</div>
+
+<div class="step">
+  <img src="img/devlog.jpg" alt="devlog の画面。作業の概要と、スマホ幅で撮ったアプリのスクショが並んでいる" loading="lazy">
+  <div>
+    <h3>4・5. スクショで確かめる</h3>
+    <p>devlog は、Claude が動作確認で撮ったスクショや動画を、作業の概要と一緒にプロジェクトの <code>devlog/</code> に残して、1 枚の HTML にまとめる Claude Code のスキルです。「完了を報告する前に devlog に記録する」と CLAUDE.md に書いておくと、毎回記録してくれます。</p>
+    <p>iPhone ではコードの差分を読まず、このページで見た目を確かめて、よければタスクを閉じ、だめならコメントを書いて <code>go</code> に戻します。</p>
+  </div>
+</div>
+
+<div class="step">
+  <img src="img/web-sessions.jpg" alt="aitodo のセッション一覧。recipe-app と blog が並んでいる" loading="lazy">
+  <div>
+    <h3>プロジェクトをまたいで</h3>
+    <p>aitodo のセッションは作業フォルダごとに分かれています。プロジェクトごとに Claude Code を起動しておけば、iPhone からはセッションを切り替えて、それぞれに <code>go</code> を出せます。オレンジの点は、いま作業中のタスクがあるという印です。</p>
+  </div>
+</div>
+
+<h2>準備（Mac）</h2>
+
+<h3>aitodo を入れて、Claude Code に MCP として登録する</h3>
+<pre><code>go install github.com/kminiatures/aitodo@latest
+cd ~/work/recipe-app
+aitodo session add recipe-app --dir .
+claude mcp add aitodo -- aitodo mcp</code></pre>
+<p>任せきりにするなら、aitodo のツールを許可しておきます（<code>.claude/settings.json</code> の <code>permissions.allow</code> に <code>"mcp__aitodo"</code> を追加）。許可しないと、Claude は最初の <code>task_claim</code> の確認で止まります。</p>
+
+<h3>Claude Code を channels と Remote Control つきで起動する</h3>
+<pre><code>cd ~/work/recipe-app
+claude --dangerously-load-development-channels server:aitodo \
+  --permission-mode bypassPermissions --remote-control</code></pre>
+<p>起動時に開発用チャンネルの確認が出たら「I am using this for local development」を選びます。<code>bypassPermissions</code> では、Claude がファイル編集やコマンドを確認なしで実行します。気になる場合は外して、確認は Remote Control から返してください。</p>
+
+<h3>Web UI と devlog を Tailscale の IP だけで開く</h3>
+<p>Mac と iPhone の両方に Tailscale を入れて、同じ tailnet にログインしておきます。そのうえで、Mac の Tailscale の IP でだけ待ち受けます。</p>
+<pre><code># aitodo の Web UI
+aitodo web --addr "$(tailscale ip -4):7878"
+
+# devlog（プロジェクトの devlog/ をそのまま配る）
+python3 -m http.server --bind "$(tailscale ip -4)" 8000 -d ~/work/recipe-app/devlog</code></pre>
+<p>iPhone の Safari では、MagicDNS のホスト名で開けます（<code>my-mac</code> は Mac のマシン名に置き換えてください）。</p>
+<pre><code>http://my-mac:7878/      aitodo
+http://my-mac:8000/      devlog</code></pre>
+
+<h3>CLAUDE.md に書いておくこと</h3>
+<pre><code>- 動作確認のためにスクショを撮ったら、自分で見て確かめたあと、
+  完了を報告する前に devlog スキルで devlog/ に記録する</code></pre>
+
+<h2>気をつけること</h2>
+<ul>
+  <li>aitodo の Web UI には認証がありません。<code>go</code> にしたタスクはそのまま Claude への指示になるので、待ち受けるのは Tailscale の IP だけにして、<code>0.0.0.0</code> や <code>tailscale funnel</code> でインターネットに出さないでください</li>
+  <li>Claude Code の channels は research preview の機能です。Team / Enterprise プランでは、管理者が channels を有効にしている必要があります</li>
+  <li>Mac がスリープすると止まります。出かける前に、電源につないでスリープしない設定にしておきます</li>
+</ul>
+
+<footer>
+  <a href="https://github.com/kminiatures/aitodo">github.com/kminiatures/aitodo</a>
+</footer>
+
+</main>
+</body>
+</html>
