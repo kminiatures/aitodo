@@ -94,6 +94,21 @@ aitodo web -s myproj --addr 127.0.0.1:9000
 
 既定ではループバック（127.0.0.1）でのみ待ち受けます。認証は無いので、`--addr 0.0.0.0:7878` などで外部に公開するのは信頼できるネットワークに限ってください。
 
+#### Tailscale で https にする
+
+`tailscale serve` を使うと、tailnet の中から https で開けます。ただし、127.0.0.1 で待ち受けている `aitodo web` に向けると 403（forbidden host）になります。serve はアクセスされたホスト名（`my-mac.tailXXXX.ts.net`）をそのまま渡しますが、aitodo はループバックで待ち受けているときにそれ以外のホスト名を拒否するためです（DNS リバインディング対策）。
+
+Tailscale の IP で待ち受けて、serve をそこへ向けてください。
+
+```sh
+aitodo web --addr "$(tailscale ip -4):7878"
+tailscale serve --bg --https 8443 "http://$(tailscale ip -4):7878"
+# → https://my-mac.tailXXXX.ts.net:8443/
+```
+
+- Web UI は `/api/...` を絶対パスで呼ぶので、`--set-path` でサブパスに置くと動きません。`/` が埋まっているときは、上のように別のポートにします
+- tailnet の外には公開されませんが、tailnet の中なら誰でも書き込めます。`tailscale funnel` は使わないでください
+
 ## 使い方（AI / スクリプト）
 
 ```sh
